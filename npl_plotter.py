@@ -6,6 +6,7 @@
 #import time
 import matplotlib as mpl
 #from matplotlib.backends.backend_pgf import FigureCanvasPgf
+from matplotlib.backends.backend_gtk3cairo import FigureCanvasGTK3Cairo as FigureCanvas
 import matplotlib.pyplot as plt
 import numpy as np
 #import re
@@ -41,20 +42,19 @@ class Spectrum:
 
 class Plotter:
     def __init__(self):
-        self.fig = plt.figure()
+        self.fig = plt.figure(figsize=(10,10), dpi=100)
         self.ax = self.fig.add_axes([0.15, 0.2, 0.8, 0.7])
-        self.spectra = []
+        self.spectra = [Spectrum("/home/simon/Dokumente/uni/masterarbeit/analyse/xps2/xy_data/2016-01-25_TiO2-001-a_cleaning-08.xy")]
+        self.canvas = FigureCanvas(self.fig)
 
     def axrange(self, x_1, x_2, y_1, y_2):
         """set axes"""
-        self._ax.axis([x_1, x_2, y_1, y_2])
+        self.ax.axis([x_1, x_2, y_1, y_2])
 
     def show_spectra(self):
         for spectrum in self.spectra:
             if spectrum.enabled:
-                print(spectrum.notes)
                 self.ax.plot(spectrum.energy, spectrum.intensity,
                              label=spectrum.notes)
-        return self.fig
 
 

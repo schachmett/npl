@@ -3,42 +3,71 @@
 import npl_plotter
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
 from matplotlib.backends.backend_gtk3cairo import FigureCanvasGTK3Cairo as FigureCanvas
+from gi.repository import Gtk
 
 def main():
-    mw = MainWindow()
-    #mw.set_default_size(400,200)
-    mw.set_border_width(10)
-    mw.show_all()
+    mc = MainClass()
+    mc.mw.connect("delete-event", Gtk.main_quit)
+    mc.mw.set_default_size(500,500)
+    #mw.set_border_width(10)
+    mc.mw.show_all()
     Gtk.main()
 
 
-class MainWindow(Gtk.Window):
+class MainClass():
     def __init__(self):
-        self.list_of_spectra = [npl_plotter.Spectrum("/home/simon/Dokumente/uni/masterarbeit/analyse/xps2/xy_data/2016-01-25_TiO2-001-a_cleaning-08.xy")]
+        self.plotter = npl_plotter.Plotter()
         
-        Gtk.Window.__init__(self, title="npl")
-        self.connect("delete-event", Gtk.main_quit)
+        self.mw = Gtk.Window(title="npl")
+        self.mw.connect("delete-event", Gtk.main_quit)
         masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(self.boxvertical)
+        self.mw.add(masterbox)
         
-        self.toolbar = self.create_toolbar()
-        self.boxvertical.pack_start(self.toolbar, False, False, 0)
+        toolbar = self.create_toolbar()
+        masterbox.pack_start(toolbar, False, False, 0)
+
+        contentpanes = Gtk.HPaned()
+        masterbox.pack_start(contentpanes, True, True, 0)
+        butt = Gtk.Button()
+        butt.set_size_request(100,100)
+        contentpanes.add1(butt)
+        
+        self.plotter.show_spectra()
+        self.plotter.canvas.draw()
+        contentpanes.add2(self.plotter.canvas)
+
+
+    def draw_plot(self):
+        pass
         
     def create_toolbar(self):
         toolbar = Gtk.Toolbar()
-        context = self.toolbar.get_style_context()
+        context = toolbar.get_style_context()
         context.add_class(Gtk.STYLE_CLASS_PRIMARY_TOOLBAR)
-        self.addbutton = Gtk.ToolButton(stock-id="list-add")
-
-        self.toolbar.insert(self.addbutton, 0)
-
+        
+        self.addbutton = Gtk.ToolButton()
+        self.addbutton.set_icon_name("list-add")
+        toolbar.insert(self.addbutton, 0)
         self.addbutton.connect("clicked", self.add_spectrum)
         return toolbar
 
-    def add_spectrum(self):
-        print("hey")
+    def add_spectrum(self, caller):
+        dialog = Gtk.FileChooserDialog("Open...", self.mw,
+                 Gtk.FileChooserAction.OPEN, (Gtk.STOCK_CANCEL,
+                 Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK))
+        xyfilter = Gtk.FileFilter()
+        xyfilter.add_pattern("*.xy")
+        xyfilter.set_name(".xy")
+        dialog.add_filter(xyfilter)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            print("selected " + dialog.get_filename())
+            self.plotter.spectra.append(npl_plotter.Spectrum(dialog.get_filename()))
+        else:
+            print("nothing selected")
+        dialog.destroy()
         
         #~ box = Gtk.VBox()
         #~ tbox = self.create_toolbox()
@@ -73,23 +102,6 @@ class MainWindow(Gtk.Window):
             #~ hbox.pack_start(checkbox, True, True, 0)
             #~ spectrabox.pack_start(hbox, True, True, 0)
         #~ return spectrabox
-
-    #~ def get_file(self, callerwidget):
-        #~ dialog = Gtk.FileChooserDialog("Open...", self,
-                 #~ Gtk.FileChooserAction.OPEN,
-                 #~ (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK))
-        #~ xyfilter = Gtk.FileFilter()
-        #~ xyfilter.add_pattern("*.xy")
-        #~ xyfilter.set_name(".xy")
-        #~ dialog.add_filter(xyfilter)
-
-        #~ response = dialog.run()
-        #~ if response == Gtk.ResponseType.OK:
-            #~ print("selected " + dialog.get_filename())
-            #~ self.list_of_spectra.append(npl_plotter.Spectrum(dialog.get_filename()))
-        #~ else:
-            #~ print("nothing selected")
-        #~ dialog.destroy()
 
     #~ def show_spectra(self, callerwidget):
         #~ self.pw.refresh(self.list_of_spectra)
