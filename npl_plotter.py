@@ -37,21 +37,26 @@ class Spectrum:
         self.cae_crr = float(fourlines[1][9])
         self.mag = fourlines[1][10]
         self.notes = fourlines[1][12]
-        self.enabled = False
+        self.enabled = True
+        self.name = ""
+
+    def treeview_strings(self):
+        return self.name, self.notes
 
 
 class Plotter:
     def __init__(self):
         self.fig = plt.figure(figsize=(10,10), dpi=100)
-        self.ax = self.fig.add_axes([0.15, 0.2, 0.8, 0.7])
+        self.ax = self.fig.add_axes([0.07, 0.05, 0.93, 0.95])
         self.spectra = [Spectrum("/home/simon/Dokumente/uni/masterarbeit/analyse/xps2/xy_data/2016-01-25_TiO2-001-a_cleaning-08.xy")]
         self.canvas = FigureCanvas(self.fig)
+        plt.yticks(rotation='vertical')
 
     def axrange(self, x_1, x_2, y_1, y_2):
         """set axes"""
         self.ax.axis([x_1, x_2, y_1, y_2])
 
-    def show_spectra(self):
+    def plot_spectra(self):
         for spectrum in self.spectra:
             if spectrum.enabled:
                 self.ax.plot(spectrum.energy, spectrum.intensity,
