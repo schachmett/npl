@@ -71,8 +71,9 @@ class Spectrum(dict):
 
     def treeview_strings(self):
         """gives values to a liststore"""
-        return (self["Visible"], self["Name"], self["Notes"], float(self["E_min"]),
-                float(self["E_max"]), int(self["Sweeps"]), float(self["Dwelltime"]), self)
+        return (self["Visible"], self["Name"], self["Notes"], str(round(float(self["E_min"]),1)),
+                str(round(float(self["E_max"]), 1)), str(self["Sweeps"]),
+                str(round(float(self["Dwelltime"]), 2)), self)
 
     def values_by_keylist(self, keys):
         values = []
@@ -129,7 +130,6 @@ class Database(list):
             self.liststore.clear()
 
     def remove(self, spectrum, treeiter=None):
-        #~ print(len(spectrum))
         super().remove(spectrum)
         if self.liststore is not None:
             if treeiter is not None:

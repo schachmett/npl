@@ -8,12 +8,14 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 from matplotlib.backends.backend_gtk3 import NavigationToolbar2GTK3
 import npl_plotter
+import re
 
 WIN_XSIZE = 1200
 WIN_YSIZE = 700
 SETTINGS_FOLDER = "./.npl/"
 SETTINGS_FILE = SETTINGS_FOLDER + "/settings.json"
 SETTINGS = {}
+BASEDIR = "/home/simon/npl/"
 
 
 def manage_globals():
@@ -39,7 +41,7 @@ def main():
     mainwindow = MainWindow()
     mainwindow.connect("delete-event", program_exit)
     mainwindow.set_size_request(WIN_XSIZE, WIN_YSIZE)
-    mainwindow.set_icon_from_file("icon.svg")
+    mainwindow.set_icon_from_file(os.path.join(BASEDIR, "icons/logo.svg"))
     mainwindow.show_all()
     Gtk.main()
 
@@ -64,6 +66,7 @@ class MainWindow(Gtk.Window):
         self.plotter = npl_plotter.Plotter(self.database)
         toolbar = ToolBar(self, self.database)
         mpltoolbar = NavBar(self.plotter.canvas, self, self.plotter)
+        anbar = AnalyzeBar(self.plotter.canvas, self, self.plotter)
         
         masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         contentpanes = Gtk.HPaned()
@@ -72,6 +75,7 @@ class MainWindow(Gtk.Window):
         self.add(masterbox)
         masterbox.pack_start(toolbar, False, False, 0)
         masterbox.pack_start(contentpanes, True, True, 0)
+        canvasbox.pack_start(anbar, False, False, 0)
         canvasbox.pack_start(self.plotter.canvas, True, True, 0)
         canvasbox.pack_start(mpltoolbar, False, False, 0)
         contentpanes.pack1(self.slist, False, False)
@@ -81,106 +85,130 @@ class MainWindow(Gtk.Window):
 
 class SpectrumList(Gtk.Box):
     """treeview in a box, shows loaded spectra"""
-    NAMECOL = None
-    ENABLECOL = None
-    ESTARTCOL = None
-    EENDCOL = None
-    NOTESCOL = None
-    SWEEPCOL = None
-    DWELLCOL = None
-    REGIONCOL = None
-
+    
     def __init__(self, mainwindow):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.mainwindow = mainwindow
+        self.cols = {"Plot": None, "Name": None, "Notes": None, "E_s [eV]": None,
+                     "E_e [eV]": None, "Sweeps": None, "Dwell [s]": None}
 
-        self.liststore = Gtk.ListStore(bool, str, str, float, float, int, float, object)
+
+        self.liststore = Gtk.ListStore(bool, str, str, str, str, str, str, object)
         self.current_filter = None
-        self.range_filter = self.liststore.filter_new()
-        self.range_filter.set_visible_func(self.spectrum_filter_func)
-        self.treeview = Gtk.TreeView.new_with_model(self.range_filter)
+        self.filter_ = self.liststore.filter_new()
+        self.filter_.set_visible_func(self.spectrum_filter_func)
+        self.treeview = Gtk.TreeView.new_with_model(self.filter_)
 
         self.treeview.connect("button-press-event", self.on_row_clicked)
         self.treeview.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+        self.treeview.set_rules_hint(True)
         # reorder and sort columns
 
         renderer = Gtk.CellRendererToggle()
         renderer.connect("toggled", self.on_spectrum_toggled)
         column = Gtk.TreeViewColumn("Plot", renderer, active=0)
         self.treeview.append_column(column)
-        SpectrumList.ENABLECOL = 0
+        self.cols["Plot"] = 0
         
         renderer = Gtk.CellRendererText(editable=True)
         renderer.connect("edited", self.on_namecol_edited)
         column = Gtk.TreeViewColumn("Name", renderer, text=1)
         column.set_resizable(True)
         self.treeview.append_column(column)
-        SpectrumList.NAMECOL = 1
+        self.cols["Name"] = 1
         
-        for i, column_title in enumerate(["Notes", "E_s", "E_e", "Sweeps", "Dwell"]):
+        for i, column_title in enumerate(["Notes", "E_s [eV]", "E_e [eV]", "Sweeps", "Dwell [s]"]):
             renderer = Gtk.CellRendererText()
             column = Gtk.TreeViewColumn(column_title, renderer, text=i+2)
             column.set_resizable(True)
             self.treeview.append_column(column)
-        SpectrumList.NOTESCOL = 2
-        SpectrumList.ESTARTCOL = 3
-        SpectrumList.EENDCOL = 4
-        SpectrumList.SWEEPCOL = 5
-        SpectrumList.DWELLCOL = 6
+        self.cols["Notes"] = 2
+        self.cols["E_s [eV]"] = 3
+        self.cols["E_e [eV]"] = 4
+        self.cols["Sweeps"] = 5
+        self.cols["Dwell [s]"] = 6
 
         self.scrollable_treelist = Gtk.ScrolledWindow()
+        self.scrollable_treelist.set_property("min-content-width", 300)
         self.scrollable_treelist.add(self.treeview)
-        self.buttonbox = self.create_filtering_buttons("None", "1", "2",
-                                                       "4", "6", "8")
+        #~ self.buttonbox = self.create_filtering_buttons("None", "1", "2",
+                                                       #~ "4", "6", "8")
+        self.filterbar = self.create_filterbar()
         self.pack_start(self.scrollable_treelist, True, True, 0)
-        self.pack_start(self.buttonbox, False, False, 0)
+        self.pack_start(self.filterbar, False, False, 0)
 
     def spectrum_filter_func(self, model, iter_, data):
-        """function for filtering treeview by e_end-e_start"""
-        if self.current_filter is None or self.current_filter == "None":
+        """function for filtering treeview"""
+        if self.current_filter is None:
             return True
         else:
-            return (float(model[iter_][SpectrumList.SWEEPCOL]) == float(self.current_filter))
+            column = self.current_filter[0]
+            print(self.current_filter[1])
+            regex = re.compile("".join([".*", self.current_filter[1], ".*"]))
+            return re.match(regex, model[iter_][column])
 
-    def on_selection_button_clicked(self, widget):
-        """select filter from button.label"""
-        self.current_filter = widget.get_label()
-        print("{} filter selected!".format(self.current_filter))
-        self.range_filter.refilter()
-
-    def create_filterbar(self, widget):
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+    def create_filterbar(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         box.set_size_request(-1, 30)
         
         criterion_combo = Gtk.ComboBoxText()
         criterion_combo.set_entry_text_column(0)
-        criterion_combo.connect("changed", self.on_filter_criterion_changed)
-        #~ for string in bla:
-            #~ criterion_combo.append(string)
+        for colname in sorted(self.cols, key=self.cols.get)[1:]:
+            criterion_combo.append_text(colname)
+        criterion_combo.set_active(1)
+
+        criterion_entry = Gtk.Entry()
+        criterion_ok = Gtk.Button(label=None, image=Gtk.Image(stock=Gtk.STOCK_FIND))
+        criterion_ok.connect("clicked", self.on_filter_criterion_changed, criterion_combo, criterion_entry)
+        criterion_cancel = Gtk.Button(label=None, image=Gtk.Image(stock=Gtk.STOCK_CANCEL))
+        criterion_cancel.connect("clicked", self.on_filter_criterion_deleted)
+        
         box.pack_start(criterion_combo, False, False, 0)
+        box.pack_start(criterion_entry, False, False, 0)
+        box.pack_start(criterion_ok, False, False, 0)
+        box.pack_start(criterion_cancel, False, False, 0)
+        return box
+
+    def on_filter_criterion_changed(self, widget, combo, entry):
+        colname = combo.get_active_text()
+        if colname is None:
+            self.current_filter == None
+            print("no search criterion selected")
+        else:
+            column = self.cols[colname]
+            sterm = entry.get_text()
+            self.current_filter = (column, sterm)
+            print("search column {} for: {}".format(colname, sterm))
+        self.filter_.refilter()
+
+    def on_filter_criterion_deleted(self, widget):
+        self.current_filter = None
+        self.filter_.refilter()
 
     def on_spectrum_toggled(self, renderer, path):
         """turn off visibility of spectra"""
         if path is not None:
             iter_ = self.liststore.get_iter(path)
             listrow = self.liststore[iter_]
-            listrow[SpectrumList.ENABLECOL] = not listrow[SpectrumList.ENABLECOL]
+            listrow[self.cols["Plot"]] = not listrow[self.cols["Plot"]]
             listrow[-1]["Visible"] = not listrow[-1]["Visible"]
             self.mainwindow.plotter.ax.cla()
             self.mainwindow.plotter.plot_spectra(keepaxes=True)
             self.mainwindow.plotter.canvas.draw()
 
     def on_row_clicked(self, treeview, event):
-        path, colum, cellx, celly = treeview.get_path_at_pos(int(event.x),
-                                                             int(event.y))
+        try:
+            path, colum, cellx, celly = treeview.get_path_at_pos(int(event.x),
+                                                                 int(event.y))
+        except TypeError:
+            # print("clicked beside row")
+            return
         iter_ = self.liststore.get_iter(path)
         if event.button == 3:
             storerow = self.liststore[iter_]
-            settingstrings = ["Name", "Sweeps", "Dwelltime", "Region",
-                              "Notes"]
-            colnumbers = [SpectrumList.NAMECOL, SpectrumList.SWEEPCOL,
-                          SpectrumList.DWELLCOL, SpectrumList.REGIONCOL,
-                          SpectrumList.NOTESCOL]
+            settingstrings = ["Name", "Sweeps", "Dwelltime", "Notes"]
+            colnumbers = [self.cols["Name"], self.cols["Sweeps"],
+                          self.cols["Dwell [s]"], self.cols["Notes"]]
             settings = storerow[-1].values_by_keylist(settingstrings)
             dialog = EnterStringsDialog(self.mainwindow, settingstrings, settings)
             response = dialog.run()
@@ -199,17 +227,7 @@ class SpectrumList(Gtk.Box):
         if path is not None:
             iter_ = self.liststore.get_iter(path)
             self.liststore[iter_][SpectrumList.NAMECOL] = newtext
-            self.liststore[iter_][-1]["Name"] = newtext
-
-    def create_filtering_buttons(self, *labels):
-        """creates the buttons for changing the filter"""
-        buttonbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        buttonbox.set_size_request(-1, 30)
-        for label in labels:
-            button = Gtk.Button(label)
-            button.connect("clicked", self.on_selection_button_clicked)
-            buttonbox.pack_start(button, False, False, 0)
-        return buttonbox
+            self.liststore[iter_][-1]["Name"] = newtexts
 
 
 class EnterStringsDialog(Gtk.Dialog):
@@ -396,6 +414,22 @@ class NavBar(NavigationToolbar2GTK3):
         self.plotter.fit_axranges()
         self.push_current()
         self._update_view()
+
+class AnalyzeBar(NavigationToolbar2GTK3):
+    def __init__(self, canvas, window, plotter):
+        self.plotter = plotter
+        self.toolitems = (
+                ('Select', 'Select span', os.path.join(BASEDIR, "icons/span"), 'select_span'),
+                (None, None, None, None),
+                ('Shirley', 'Subtract shirley background', os.path.join(BASEDIR, "icons/shirley"), 'do_shirley')
+            )
+        super().__init__(canvas, window)
+
+    def select_span(self, event):
+        pass
+
+    def do_shirley(self, event):
+        pass
 
 
 if __name__ == '__main__':
