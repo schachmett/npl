@@ -6,29 +6,32 @@
 from matplotlib.backends.backend_gtk3cairo import FigureCanvasGTK3Cairo
 import matplotlib.pyplot as plt
 import numpy as np
-# import json
 import deepdish as dd
 import re
 import os
 # from lmfit.models import PseudoVoigtModel
 # from cycler import cycler
 
+BASEDIR = "/home/simon/npl/"
+SETTINGS_FOLDER = os.path.join(BASEDIR, ".npl/")
 
 def unpack_eistxt(fname):
     splitregex = re.compile("^Region.*")
     splitcounter = 0
     with open(fname, "r") as eisfile:
-        xyfile = open(".npl/" + os.path.basename(fname) + "-"
+        xyfile = open(SETTINGS_FOLDER + os.path.basename(fname) + "-"
                       + str(splitcounter).zfill(2) + '.xym', 'w')
         for line in eisfile:
             if re.match(splitregex, line):
                 splitcounter += 1
-                xyfile = open(".npl/" + os.path.basename(fname) + "-"
+                print(SETTINGS_FOLDER + os.path.basename(fname) + "-"
+                              + str(splitcounter).zfill(2) + '.xym')
+                xyfile = open(SETTINGS_FOLDER + os.path.basename(fname) + "-"
                               + str(splitcounter).zfill(2) + '.xym', 'w')
             xyfile.write(line)
     fnamelist = []
     for i in range(0, splitcounter+1):
-        xym_fname = (".npl/" + os.path.basename(fname) + "-"
+        xym_fname = (SETTINGS_FOLDER + os.path.basename(fname) + "-"
                      + str(i).zfill(2) + '.xym')
         if os.stat(xym_fname).st_size != 0:
             fnamelist.append(xym_fname)
@@ -172,9 +175,56 @@ class Database(list):
             self.remove(spectrum)
 
 
+class RSFlib(list):
+    """stores relative sensitivity factors, example: [O, 1s, 532, 2.93, Mg, r]"""
+    def __init__(self):
+        with open(os.path.join(BASEDIR, "rsf.lib"), "r") as libfile:
+            for line in libfile:
+                entry = line.split("\t")
+                if entry[9] == "Any":
+                    entry[8] = 1
+                self.append([entry[0], entry[1], float(entry[5]),
+                             float(entry[8]), entry[9]])
+        self.selected = []
+        self.selected_names = []
+        self.colorcount = 0
+        self.sources = ("Mg", "Any")
+
+    def set_source(self, source):
+        self.sources = (source, "Any")
+
+    def select(self, element):
+        self.selected_names.append(element)
+        for entry in self:
+            if entry[0] == element and entry[4] in self.sources:
+                entry.append("bgrcmy"[self.colorcount])
+                self.selected.append(entry)
+        self.colorcount += 1
+        if self.colorcount > 5:
+            self.colorcount = 0
+
+    def deselect(self, element):
+        self.selected_names.remove(element)
+        for entry in self.selected:
+            if entry[0] == element:
+                self.selected.remove(entry)
+
+    def flush(self):
+        self.selected = []
+        self.selected_names = []
+        self.colorcount = 0
+        
+    def give_data(self):
+        return self.selected
+
+    def give_selected(self):
+        selstring = " ".join(self.selected_names)
+        return selstring
+
+
 class Plotter:
     """does the plotting stuff"""
-    def __init__(self, database):
+    def __init__(self, database, rsflib):
         self.fig = plt.figure(figsize=(10, 10), dpi=80)
         self.ax = self.fig.add_axes([0, 0, 1, 1])
         self.database = database
@@ -184,6 +234,8 @@ class Plotter:
         self.x_2 = -np.inf
         self.y_1 = np.inf
         self.y_2 = -np.inf
+
+        self.rsflib = rsflib
         self.ax.tick_params(axis='both', which='major', pad=-20)
 
     def axrange(self):
@@ -200,7 +252,7 @@ class Plotter:
         for spectrum in self.database:
             if spectrum["Visible"]:
                 self.ax.plot(spectrum["Energy"], spectrum["Intensity"],
-                             label=spectrum["Notes"], c="k")
+                             label=spectrum["Notes"], c="k", lw=1)
 
         self.make_pretty()
         if not keepaxes:
@@ -208,6 +260,19 @@ class Plotter:
         else:
             self.axrange()
         self.canvas.draw_idle()
+
+    def plot_rsf(self):
+        """plots relative sensitivity factors"""
+        rsfs = self.rsflib.give_data()
+        if len(rsfs) == 0:
+            return
+        normfactor = self.y_2 / max([x[3] for x in rsfs]) * 0.8
+        for rsf in rsfs:
+            self.ax.plot([rsf[2], rsf[2]], [0, rsf[3]*normfactor], c=rsf[5],
+                         lw=1)
+            self.ax.annotate(" ".join([rsf[0], rsf[1]]),
+                             xy=[rsf[2], rsf[3]*normfactor],
+                             textcoords="data")
 
     def make_pretty(self):
         plt.yticks(rotation='vertical')
@@ -230,7 +295,8 @@ class Plotter:
         self.y_2 *= 1.05
         self.axrange()
 
-    def refresh(self):
+    def refresh(self, keepaxes=False):
         """refreshes canvas"""
-        self.plot_spectra()
+        self.plot_spectra(keepaxes)
+        self.plot_rsf()
         self.canvas.draw()

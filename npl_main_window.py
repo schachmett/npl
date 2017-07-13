@@ -7,15 +7,16 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 from matplotlib.backends.backend_gtk3 import NavigationToolbar2GTK3
+from matplotlib.widgets import SpanSelector
 import npl_plotter
 import re
 
 WIN_XSIZE = 1200
 WIN_YSIZE = 700
-SETTINGS_FOLDER = "./.npl/"
+BASEDIR = "/home/simon/npl/"
+SETTINGS_FOLDER = os.path.join(BASEDIR, ".npl/")
 SETTINGS_FILE = SETTINGS_FOLDER + "/settings.json"
 SETTINGS = {}
-BASEDIR = "/home/simon/npl/"
 
 
 def manage_globals():
@@ -63,7 +64,9 @@ class MainWindow(Gtk.Window):
         if SETTINGS["project_file"] is not None:
             if os.path.isfile(SETTINGS["project_file"]):
                 self.database.load(SETTINGS["project_file"])
-        self.plotter = npl_plotter.Plotter(self.database)
+        self.rsflib = npl_plotter.RSFlib()
+        
+        self.plotter = npl_plotter.Plotter(self.database, self.rsflib)
         toolbar = ToolBar(self, self.database)
         mpltoolbar = NavBar(self.plotter.canvas, self, self.plotter)
         anbar = AnalyzeBar(self.plotter.canvas, self, self.plotter)
@@ -80,7 +83,7 @@ class MainWindow(Gtk.Window):
         canvasbox.pack_start(mpltoolbar, False, False, 0)
         contentpanes.pack1(self.slist, False, False)
         contentpanes.pack2(canvasbox, True, False)
-        self.plotter.plot_spectra()
+        self.plotter.refresh()
 
 
 class SpectrumList(Gtk.Box):
@@ -143,7 +146,6 @@ class SpectrumList(Gtk.Box):
             return True
         else:
             column = self.current_filter[0]
-            print(self.current_filter[1])
             regex = re.compile("".join([".*", self.current_filter[1], ".*"]))
             return re.match(regex, model[iter_][column])
 
@@ -193,8 +195,7 @@ class SpectrumList(Gtk.Box):
             listrow[self.cols["Plot"]] = not listrow[self.cols["Plot"]]
             listrow[-1]["Visible"] = not listrow[-1]["Visible"]
             self.mainwindow.plotter.ax.cla()
-            self.mainwindow.plotter.plot_spectra(keepaxes=True)
-            self.mainwindow.plotter.canvas.draw()
+            self.mainwindow.plotter.refresh(keepaxes=True)
 
     def on_row_clicked(self, treeview, event):
         try:
@@ -246,7 +247,8 @@ class EnterStringsDialog(Gtk.Dialog):
             row = Gtk.Box()
             label = Gtk.Label(label=field)
             entry = Gtk.Entry()
-            entry.set_text(str(defaults[i]))
+            if defaults is not None:
+                entry.set_text(str(defaults[i]))
             self.entries.append((field, entry))
             row.pack_start(label, True, True, 10)
             row.pack_start(entry, False, True, 0)
@@ -317,7 +319,7 @@ class ToolBar(Gtk.Toolbar):
         else:
             print("nothing selected")
 
-        self.mainwindow.plotter.plot_spectra(keepaxes=True)
+        self.mainwindow.plotter.refresh(keepaxes=True)
         dialog.destroy()
 
     def remove_spectrum(self, caller):
@@ -328,7 +330,7 @@ class ToolBar(Gtk.Toolbar):
         for path in pathlist[::-1]:     # go backwards, so the paths stay valid
             treeiter = model.get_iter(path)
             self.database.remove(model[treeiter][-1])
-        self.mainwindow.plotter.plot_spectra(keepaxes=True)
+        self.mainwindow.plotter.refresh(keepaxes=True)
 
     def save_project_as(self, *caller):
         """save project under new file name"""
@@ -345,8 +347,6 @@ class ToolBar(Gtk.Toolbar):
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
             fname = dialog.get_filename()
-            print(fname)
-            print(fname[-3])
             if fname[-3:] != ".h5":
                 fname += ".h5"
             self.database.dump(fname)
@@ -380,7 +380,7 @@ class ToolBar(Gtk.Toolbar):
             print("loaded project " + fname)
             self.database.load(fname)
             SETTINGS["project_file"] = fname
-            self.mainwindow.plotter.plot_spectra()
+            self.mainwindow.plotter.refresh()
         else:
             print("project load aborted")
         dialog.destroy()
@@ -412,15 +412,18 @@ class NavBar(NavigationToolbar2GTK3):
         if self._views.empty():
             self.push_current()
         self.plotter.fit_axranges()
+        self.plotter.refresh()
         self.push_current()
         self._update_view()
 
 class AnalyzeBar(NavigationToolbar2GTK3):
     def __init__(self, canvas, window, plotter):
+        self.mainwindow = window
         self.plotter = plotter
         self.toolitems = (
-                ('Select', 'Select span', os.path.join(BASEDIR, "icons/span"), 'select_span'),
+                ('Elements', 'Select elements', os.path.join(BASEDIR, "icons/elements"), "select_element"),
                 (None, None, None, None),
+                ('Select', 'Select span', os.path.join(BASEDIR, "icons/span"), 'select_span'),
                 ('Shirley', 'Subtract shirley background', os.path.join(BASEDIR, "icons/shirley"), 'do_shirley')
             )
         super().__init__(canvas, window)
@@ -430,6 +433,23 @@ class AnalyzeBar(NavigationToolbar2GTK3):
 
     def do_shirley(self, event):
         pass
+
+    def select_element(self, event):
+        dialog = EnterStringsDialog(self.mainwindow, ["Elements", "Sources"],
+                                    [self.mainwindow.rsflib.give_selected(),
+                                     self.mainwindow.rsflib.sources[0]])
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            sourcestring = dialog.output()["Sources"]
+            self.mainwindow.rsflib.set_source(sourcestring)
+            
+            elementstring = dialog.output()["Elements"]
+            elements = re.findall(r"[\w]+", elementstring)
+            self.mainwindow.rsflib.flush()
+            for element in elements:
+                self.mainwindow.rsflib.select(element)
+            self.plotter.refresh()
+        dialog.destroy()
 
 
 if __name__ == '__main__':
