@@ -92,11 +92,13 @@ class SpectrumList(Gtk.Box):
     def __init__(self, mainwindow):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.mainwindow = mainwindow
-        self.cols = {"Plot": None, "Name": None, "Notes": None, "E_s [eV]": None,
-                     "E_e [eV]": None, "Sweeps": None, "Dwell [s]": None}
+        self.cols = {"Plot": None, "Name": None, "Notes": None,
+                     "E_s [eV]": None, "E_e [eV]": None, "Sweeps": None,
+                     "Dwell [s]": None}
 
 
-        self.liststore = Gtk.ListStore(bool, str, str, str, str, str, str, object)
+        self.liststore = Gtk.ListStore(bool, str, str, str, str, str, str,
+                                       object)
         self.current_filter = None
         self.filter_ = self.liststore.filter_new()
         self.filter_.set_visible_func(self.spectrum_filter_func)
@@ -119,8 +121,9 @@ class SpectrumList(Gtk.Box):
         column.set_resizable(True)
         self.treeview.append_column(column)
         self.cols["Name"] = 1
-        
-        for i, column_title in enumerate(["Notes", "E_s [eV]", "E_e [eV]", "Sweeps", "Dwell [s]"]):
+
+        coltitles = ["Notes", "E_s [eV]", "E_e [eV]", "Sweeps", "Dwell [s]"]
+        for i, column_title in enumerate(coltitles):
             renderer = Gtk.CellRendererText()
             column = Gtk.TreeViewColumn(column_title, renderer, text=i+2)
             column.set_resizable(True)
@@ -160,9 +163,12 @@ class SpectrumList(Gtk.Box):
         criterion_combo.set_active(1)
 
         criterion_entry = Gtk.Entry()
-        criterion_ok = Gtk.Button(label=None, image=Gtk.Image(stock=Gtk.STOCK_FIND))
-        criterion_ok.connect("clicked", self.on_filter_criterion_changed, criterion_combo, criterion_entry)
-        criterion_cancel = Gtk.Button(label=None, image=Gtk.Image(stock=Gtk.STOCK_CANCEL))
+        criterion_ok = Gtk.Button(label=None,
+                                  image=Gtk.Image(stock=Gtk.STOCK_FIND))
+        criterion_ok.connect("clicked", self.on_filter_criterion_changed,
+                             criterion_combo, criterion_entry)
+        criterion_cancel = Gtk.Button(label=None,
+                                      image=Gtk.Image(stock=Gtk.STOCK_CANCEL))
         criterion_cancel.connect("clicked", self.on_filter_criterion_deleted)
         
         box.pack_start(criterion_combo, False, False, 0)
@@ -401,7 +407,8 @@ class NavBar(NavigationToolbar2GTK3):
                 ('Back', 'Back to  previous view', 'back', 'back'),
                 ('Forward', 'Forward to next view', 'forward', 'forward'),
                 (None, None, None, None),
-                ('Pan', 'Pan axes with left mouse, zoom with right', 'move', 'pan'),
+                ('Pan', 'Pan axes with left mouse, zoom with right', 'move',
+                 'pan'),
                 ('Zoom', 'Zoom to rectangle', 'zoom_to_rect', 'zoom'),
                 (None, None, None, None),
                 ('Save', 'Save the figure', 'filesave', 'save_figure'),
@@ -421,10 +428,13 @@ class AnalyzeBar(NavigationToolbar2GTK3):
         self.mainwindow = window
         self.plotter = plotter
         self.toolitems = (
-                ('Elements', 'Select elements', os.path.join(BASEDIR, "icons/elements"), "select_element"),
+                ('Elements', 'Select elements',
+                 os.path.join(BASEDIR, "icons/elements3"), "select_element"),
                 (None, None, None, None),
-                ('Select', 'Select span', os.path.join(BASEDIR, "icons/span"), 'select_span'),
-                ('Shirley', 'Subtract shirley background', os.path.join(BASEDIR, "icons/shirley"), 'do_shirley')
+                ('Select', 'Select span',
+                 os.path.join(BASEDIR, "icons/span"), 'select_span'),
+                ('Shirley', 'Subtract shirley background',
+                 os.path.join(BASEDIR, "icons/shirley"), 'do_shirley')
             )
         super().__init__(canvas, window)
 
@@ -448,7 +458,7 @@ class AnalyzeBar(NavigationToolbar2GTK3):
             self.mainwindow.rsflib.flush()
             for element in elements:
                 self.mainwindow.rsflib.select(element)
-            self.plotter.refresh()
+            self.plotter.refresh(keepaxes=True)
         dialog.destroy()
 
 

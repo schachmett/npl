@@ -74,7 +74,8 @@ class Spectrum(dict):
 
     def treeview_strings(self):
         """gives values to a liststore"""
-        return (self["Visible"], self["Name"], self["Notes"], str(round(float(self["E_min"]),1)),
+        return (self["Visible"], self["Name"], self["Notes"],
+                str(round(float(self["E_min"]),1)),
                 str(round(float(self["E_max"]), 1)), str(self["Sweeps"]),
                 str(round(float(self["Dwelltime"]), 2)), self)
 
@@ -176,7 +177,8 @@ class Database(list):
 
 
 class RSFlib(list):
-    """stores relative sensitivity factors, example: [O, 1s, 532, 2.93, Mg, r]"""
+    """stores relative sensitivity factors, example:
+    [O, 1s, 532, 2.93, Mg, r]"""
     def __init__(self):
         with open(os.path.join(BASEDIR, "rsf.lib"), "r") as libfile:
             for line in libfile:
