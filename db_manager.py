@@ -6,23 +6,9 @@ import re
 import os
 import pickle
 import numpy as np
+from containers import Spectrum, SpectrumContainer
 
-BASEDIR = "/home/simon/npl/"
-SETTINGS_FOLDER = os.path.join(BASEDIR, ".npl/")
-SETTINGS_FILE = SETTINGS_FOLDER + "/settings.json"
-
-
-def main():
-    """does stuff, mainly for testing now"""
-    dbh = DBHandler("test.db")
-    dbh.create_tables()
-
-    parser = FileParser()
-    datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-01.xym"
-    parsed = parser.parse_spectrum_file(datafname)
-    for data in parsed:
-        dbh.add_spectrum(data)
-    dbh.remove_spectrum(3)
+BASEDIR = "/home/simon/npl/.npl"
 
 
 class FileParser():
@@ -32,7 +18,7 @@ class FileParser():
 
     def parse_spectrum_file(self, fname):
         """finds out file extension and calls appropriate parsing function"""
-        parseds = []
+        parseds = list()
         if fname.split(".")[-1] == "xym":
             parsed = self.parse_xymfile(fname)
             parseds.append(parsed)
@@ -53,7 +39,7 @@ class FileParser():
 
     def parse_xymfile(self, fname):
         """parses Omicron split txt file"""
-        data = {}
+        data = dict()
         data["Filename"] = fname
         values = np.loadtxt(data["Filename"], delimiter="\t",
                             skiprows=5, unpack=True)
@@ -79,14 +65,14 @@ class FileParser():
         splitregex = re.compile("^Region.*")
         splitcounter = 0
         with open(fname, "r") as eisfile:
-            wname = "{0}{1}-{2}.xym".format(SETTINGS_FOLDER,
+            wname = "{0}{1}-{2}.xym".format(BASEDIR,
                                             os.path.basename(fname),
                                             str(splitcounter).zfill(2))
             xyfile = open(wname, 'w')
             for line in eisfile:
                 if re.match(splitregex, line):
                     splitcounter += 1
-                    wname = "{0}{1}-{2}.xym".format(SETTINGS_FOLDER,
+                    wname = "{0}{1}-{2}.xym".format(BASEDIR,
                                                     os.path.basename(fname),
                                                     str(splitcounter).zfill(2))
                     print(wname)
@@ -94,7 +80,7 @@ class FileParser():
                 xyfile.write(line)
         fnamelist = []
         for i in range(0, splitcounter+1):
-            xym_fname = "{0}{1}-{2}.xym".format(SETTINGS_FOLDER,
+            xym_fname = "{0}{1}-{2}.xym".format(BASEDIR,
                                                 os.path.basename(fname),
                                                 str(i).zfill(2))
             if os.stat(xym_fname).st_size != 0:
@@ -104,11 +90,13 @@ class FileParser():
 
 class DBHandler():
     """handles basic database accessing"""
+#     to do: better performance by opening and closing the dbfile less
     spectrum_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
                      "DwellTime", "PassEnergy", "Visibility"]
 
-    def __init__(self, dbfilename):
-        self.dbfilename = dbfilename
+    def __init__(self, dbfilename="npl.db"):
+        self.dbfilename = os.path.join(BASEDIR, dbfilename)
+        self.create_tables()
 
     def query(self, sql, parameters):
         """queries db"""
@@ -153,31 +141,30 @@ class DBHandler():
             table_name = sql.split()[2]
             exists = self.query("SELECT name FROM sqlite_master WHERE name=?",
                                 (table_name, ))
-            if exists:
-                print("Table '{0}' already exists, did not create it "
-                      "again".format(table_name))
-            else:
+            if not exists:
                 self.execute(sql, ())
 
-    def drop_tables(self):
+    def wipe_tables(self):
         """drops em hard"""
-        sql = """DROP TABLE Spectrum
-                 DROP TABLE SpectrumData"""
-        self.execute(sql, ())
+        sqls = ["DROP TABLE Spectrum",
+                "DROP TABLE SpectrumData"]
+        for sql in sqls:
+            self.execute(sql, ())
+        self.create_tables()
 
     def get_container(self):
         """loads text project file to current db"""
         sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename, Sweeps,
                  DwellTime, PassEnergy, Visibility
                  FROM Spectrum"""
-        spectrum_container = []
+        spectrum_container = SpectrumContainer(self)
         spectra = self.query(sql, ())
         for spectrum in spectra:
             sid = spectrum[0]
-            sql= """SELECT Energy, Intensity, Type
-                    FROM SpectrumData
-                    WHERE SpectrumID=?"""
-            spectrum_data = self.query(sql, (sid, ))
+            sql = """SELECT Energy, Intensity, Type
+                     FROM SpectrumData
+                     WHERE SpectrumID=?"""
+            spectrum_data = self.query(sql, (sid, ))[0]
             specdict = {"SpectrumID": sid, "Name": spectrum[1],
                         "Notes": spectrum[2], "EISRegion": spectrum[3],
                         "Filename": spectrum[4], "Sweeps": spectrum[5],
@@ -191,12 +178,21 @@ class DBHandler():
 
     def save_container(self, spectrum_container):
         """dumps current db as project text file"""
-        self.drop_tables()
+        self.wipe_tables()
+        idlist = list()
         for spectrum in spectrum_container:
-            self.add_spectrum(spectrum)
+            idlist.append(self.add_spectrum(spectrum))
+        return idlist
 
     def change_dbfile(self, new_filename):
+        """change db filename"""
         self.dbfilename = new_filename
+        self.create_tables()
+
+    def remove_dbfile(self):
+        """trashes db file"""
+        os.remove(self.dbfilename)
+        self.dbfilename = None
 
     def add_spectrum(self, spectrum):
         """adds new spectrum from a dict from the parser"""
@@ -242,71 +238,42 @@ class DBHandler():
         sql = """SELECT SpectrumID FROM Spectrum
                  WHERE Notes=? AND EISRegion=? AND Filename=? AND Sweeps=?
                  AND DwellTime=? AND PassEnergy=?"""
-        values = (newspectrum[key] for key in self.spectrum_keys[:-1])
+        values = tuple(spectrum[key] for key in self.spectrum_keys[1:-1])
         ids = self.query(sql, values)
         if len(ids) < 1:
-            print("Did not find {}".format(spectrum))
+            print("Did not find {0}".format(spectrum))
             return None
         if len(ids) == 1:
-            return ids
+            return ids[0][0]
         if len(ids) > 1:
-            print("Found multiple IDs for spectrum {0}: "
+            print("Found multiple IDs for spectrum {0}:\n"
                   "{1}".format(spectrum, ids))
-            return None
-
-
-class SpectrumContainer():
-    """parses database for convenient use from the UI"""
-    def __init__(self, dbhandler):
-        pass
-
-    def get_treeview_data(self):
-        """gives database representation suitable for the treeview"""
-        pass
-
-    def get_plotter_data(self):
-        """gives database representation suitable for the plootter"""
-        pass
-
-
-class Spectrum(dict):
-    """stores spectrum data as an object"""
-
-    essential_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
-                      "DwellTime", "PassEnergy", "Energy", "Intensity"]
-    defaulting_dict = {"ID": None, "Visibility": False}
-
-    def __init__(self, datadict):
-        super().__init__()
-        for key in self.essential_keys:
-            if key not in datadict.keys():
-                raise ValueError
-            else:
-                self[key] = datadict[key]
-        for key in self.defaulting_dict.keys():
-            if key not in datadict.keys():
-                self[key] = self.defaulting_dict[key]
-            else:
-                self[key] = datadict[key]
-
-#     def __setitem__(self, key, value):
-#         self[key] = value
-#         if self["ID"] is not None:
-#             self.dbh.amend(self["ID"], self)
-#         else:
-#             self.dbh.add_spectrum(self)
-
-    def plot(self):
-        """switch plotting flag on"""
-        self["Visibility"] = True
-
-    def unplot(self):
-        """switch plotting flag off"""
-        self["Visibility"] = False
+            return ids[0][0]
 
 
 if __name__ == "__main__":
-    main()
+    pass
+#     dbh = DBHandler("test.npl")
+#     dbh.wipe_tables()
+
+#     parser = FileParser()
+#     prs = list()
+#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-01.xym"
+#     prs.extend(parser.parse_spectrum_file(datafname))
+#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-02.xym"
+#     prs.extend(parser.parse_spectrum_file(datafname))
+#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-03.xym"
+#     prs.extend(parser.parse_spectrum_file(datafname))
+#     for dat in prs:
+#         if dat is not None:
+#             dbh.add_spectrum(Spectrum(dat))
+#     dbh.amend_spectrum(2, prs[1])
+#     dbh.change_dbfile("test2.db")
+#     dbh.add_spectrum(Spectrum(parseds[1]))
+#     print(dbh.sid(Spectrum(parseds[1])))
+#     print(dbh.get_container())
+
+
 #                    """CREATE TABLE Region
 #                       (RegionID integer,
 #                        SpectrumDataID integer,
