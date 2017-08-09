@@ -17,18 +17,23 @@ SETTINGS_FOLDER = os.path.join(BASEDIR, ".npl/")
 
 def unpack_eistxt(fname):
     splitregex = re.compile("^Region.*")
+    layerregex = re.compile("^Layer.*")
     splitcounter = 0
     with open(fname, "r") as eisfile:
         xyfile = open(SETTINGS_FOLDER + os.path.basename(fname) + "-"
                       + str(splitcounter).zfill(2) + '.xym', 'w')
         for line in eisfile:
             if re.match(splitregex, line):
+                donotrecord = 0
                 splitcounter += 1
                 print(SETTINGS_FOLDER + os.path.basename(fname) + "-"
                               + str(splitcounter).zfill(2) + '.xym')
                 xyfile = open(SETTINGS_FOLDER + os.path.basename(fname) + "-"
                               + str(splitcounter).zfill(2) + '.xym', 'w')
-            xyfile.write(line)
+            if re.match(layerregex, line):
+                donotrecord += 1
+            if donotrecord < 2:
+                xyfile.write(line)
     fnamelist = []
     for i in range(0, splitcounter+1):
         xym_fname = (SETTINGS_FOLDER + os.path.basename(fname) + "-"

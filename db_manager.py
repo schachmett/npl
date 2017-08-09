@@ -41,7 +41,7 @@ class FileParser():
         """parses Omicron split txt file"""
         data = dict()
         data["Filename"] = fname
-        values = np.loadtxt(data["Filename"], delimiter="\t",
+        values = np.loadtxt(data["Filename"], delimiter="\t", comments="L",
                             skiprows=5, unpack=True)
         data["Energy"] = values[0, ::-1]
         data["Intensity"] = values[1, ::-1]
@@ -53,7 +53,7 @@ class FileParser():
         data["DwellTime"] = float(header[1][7])
         data["PassEnergy"] = float(header[1][9])
         data["Notes"] = header[1][12]
-        data["Visibility"] = "default"
+        data["Visibility"] = None
         data["Name"] = str()
         if header[3][0] is not "1":
             return None
@@ -62,29 +62,25 @@ class FileParser():
 
     def unpack_eistxt(self, fname):
         """splits Omicron EIS txt file"""
-        splitregex = re.compile("^Region.*")
-        splitcounter = 0
+        splitregex = re.compile(r"^Region.*")
+        skipregex = re.compile(r"^[0-9]*\s*False\s*0\).*")
+        fnamelist = []
+        splitcount = 0
         with open(fname, "r") as eisfile:
-            wname = "{0}{1}-{2}.xym".format(BASEDIR,
-                                            os.path.basename(fname),
-                                            str(splitcounter).zfill(2))
-            xyfile = open(wname, 'w')
             for line in eisfile:
                 if re.match(splitregex, line):
-                    splitcounter += 1
-                    wname = "{0}{1}-{2}.xym".format(BASEDIR,
-                                                    os.path.basename(fname),
-                                                    str(splitcounter).zfill(2))
-                    print(wname)
+                    splitcount += 1
+                    wname = "{0}/{1}-{2}.xym".format(BASEDIR,
+                                                     os.path.basename(fname),
+                                                     str(splitcount).zfill(2))
+#                     print("+++ {}".format(wname))
                     xyfile = open(wname, 'w')
-                xyfile.write(line)
-        fnamelist = []
-        for i in range(0, splitcounter+1):
-            xym_fname = "{0}{1}-{2}.xym".format(BASEDIR,
-                                                os.path.basename(fname),
-                                                str(i).zfill(2))
-            if os.stat(xym_fname).st_size != 0:
-                fnamelist.append(xym_fname)
+                    fnamelist.append(wname)
+                    skip = False
+                elif re.match(skipregex, line):
+                    skip = True
+                if not skip:
+                    xyfile.write(line)
         return fnamelist
 
 
@@ -137,51 +133,66 @@ class DBHandler():
                           PRIMARY KEY (SpectrumDataID),
                           FOREIGN KEY (SpectrumID) REFERENCES
                                        Spectrum(SpectrumID))"""]
-        for sql in create_sql:
-            table_name = sql.split()[2]
-            exists = self.query("SELECT name FROM sqlite_master WHERE name=?",
-                                (table_name, ))
-            if not exists:
-                self.execute(sql, ())
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            for sql in create_sql:
+                table_name = sql.split()[2]
+                cursor.execute("SELECT name FROM sqlite_master WHERE name=?",
+                               (table_name, ))
+                exists = cursor.fetchall()
+                if not exists:
+                    cursor.execute(sql, ())
+                    database.commit()
 
     def wipe_tables(self):
         """drops em hard"""
-        sqls = ["DROP TABLE Spectrum",
-                "DROP TABLE SpectrumData"]
-        for sql in sqls:
-            self.execute(sql, ())
+        with sqlite3.connect(self.dbfilename) as database:
+            sqls = ["DROP TABLE Spectrum",
+                    "DROP TABLE SpectrumData"]
+            cursor = database.cursor()
+            for sql in sqls:
+                cursor.execute(sql, ())
+            database.commit()
         self.create_tables()
 
     def get_container(self):
         """loads text project file to current db"""
-        sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename, Sweeps,
-                 DwellTime, PassEnergy, Visibility
-                 FROM Spectrum"""
-        spectrum_container = SpectrumContainer(self)
-        spectra = self.query(sql, ())
-        for spectrum in spectra:
-            sid = spectrum[0]
-            sql = """SELECT Energy, Intensity, Type
-                     FROM SpectrumData
-                     WHERE SpectrumID=?"""
-            spectrum_data = self.query(sql, (sid, ))[0]
-            specdict = {"SpectrumID": sid, "Name": spectrum[1],
-                        "Notes": spectrum[2], "EISRegion": spectrum[3],
-                        "Filename": spectrum[4], "Sweeps": spectrum[5],
-                        "DwellTime": spectrum[6], "PassEnergy": spectrum[7],
-                        "Visibility": spectrum[8]}
-            if spectrum_data[2] == "default":
-                specdict["Energy"] = pickle.loads(spectrum_data[0])
-                specdict["Intensity"] = pickle.loads(spectrum_data[1])
-            spectrum_container.append(Spectrum(specdict))
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename,
+                     Sweeps, DwellTime, PassEnergy, Visibility
+                     FROM Spectrum"""
+            spectrum_container = SpectrumContainer(self)
+            cursor.execute(sql, ())
+            spectra = cursor.fetchall()
+            for spectrum in spectra:
+                sid = spectrum[0]
+                sql = """SELECT Energy, Intensity, Type
+                         FROM SpectrumData
+                         WHERE SpectrumID=?"""
+                cursor.execute(sql, (sid, ))
+                spectrum_data = cursor.fetchall()[0]
+                specdict = {"SpectrumID": sid, "Name": spectrum[1],
+                            "Notes": spectrum[2], "EISRegion": spectrum[3],
+                            "Filename": spectrum[4], "Sweeps": spectrum[5],
+                            "DwellTime": spectrum[6],
+                            "PassEnergy": spectrum[7],
+                            "Visibility": spectrum[8]}
+                if spectrum_data[2] == "default":
+                    specdict["Energy"] = pickle.loads(spectrum_data[0])
+                    specdict["Intensity"] = pickle.loads(spectrum_data[1])
+                spectrum_container.append(Spectrum(specdict))
         return spectrum_container
 
     def save_container(self, spectrum_container):
         """dumps current db as project text file"""
         self.wipe_tables()
         idlist = list()
-        for spectrum in spectrum_container:
-            idlist.append(self.add_spectrum(spectrum))
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            for spectrum in spectrum_container:
+                idlist.append(self.add_spectrum(spectrum, cursor))
+            database.commit()
         return idlist
 
     def change_dbfile(self, new_filename):
@@ -194,61 +205,82 @@ class DBHandler():
         os.remove(self.dbfilename)
         self.dbfilename = None
 
-    def add_spectrum(self, spectrum):
+    def add_spectrum(self, spectrum, cursor=None):
         """adds new spectrum from a dict from the parser"""
-        sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename, Sweeps,
-                                      DwellTime, PassEnergy, Visibility)
+        needs_closing = False
+        if cursor is None:
+            needs_closing = True
+            database = sqlite3.connect(self.dbfilename)
+            cursor = database.cursor()
+        sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
+                                      Sweeps, DwellTime, PassEnergy,
+                                      Visibility)
                  VALUES(?, ?, ?, ?, ?, ?, ?, ?)"""
         values = tuple(spectrum[key] for key in self.spectrum_keys)
-        spectrum_id = self.execute(sql, values)
-
-        sql = """INSERT INTO SpectrumData(Energy, Intensity, Type, SpectrumID)
+        cursor.execute(sql, values)
+        spectrum_id = cursor.lastrowid
+        sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
+                                          SpectrumID)
                 VALUES(?, ?, ?, ?)"""
         energy = pickle.dumps(spectrum["Energy"])
         intensity = pickle.dumps(spectrum["Intensity"])
-        self.execute(sql, (energy, intensity, "default", spectrum_id))
+        cursor.execute(sql, (energy, intensity, "default", spectrum_id))
+        if needs_closing:
+            database.commit()
+            database.close()
         return spectrum_id
 
     def remove_spectrum(self, spectrum_id):
         """removes spectrum"""
-        sql = "DELETE FROM Spectrum WHERE SpectrumID=?"
-        self.execute(sql, (spectrum_id, ))
-        sql = "DELETE FROM SpectrumData WHERE SpectrumID=?"
-        self.execute(sql, (spectrum_id, ))
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            sql = "DELETE FROM Spectrum WHERE SpectrumID=?"
+            cursor.execute(sql, (spectrum_id, ))
+            sql = "DELETE FROM SpectrumData WHERE SpectrumID=?"
+            cursor.execute(sql, (spectrum_id, ))
+            database.commit()
 
     def amend_spectrum(self, spectrum_id, newspectrum):
         """alters spectrum"""
         self.remove_spectrum(spectrum_id)
-        sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename, Sweeps,
-                                      DwellTime, PassEnergy, Visibility,
-                                      SpectrumID)
-                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-        values = (*[newspectrum[key] for key in self.spectrum_keys],
-                  spectrum_id)
-        spectrum_id = self.execute(sql, values)
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
+                                          Sweeps, DwellTime, PassEnergy,
+                                          Visibility, SpectrumID)
+                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+            values = (*[newspectrum[key] for key in self.spectrum_keys],
+                      spectrum_id)
+            cursor.execute(sql, values)
+            spectrum_id = cursor.lastrowid
 
-        sql = """INSERT INTO SpectrumData(Energy, Intensity, Type, SpectrumID)
-                VALUES(?, ?, ?, ?)"""
-        energy = pickle.dumps(newspectrum["Energy"])
-        intensity = pickle.dumps(newspectrum["Intensity"])
-        self.execute(sql, (energy, intensity, "default", spectrum_id))
+            sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
+                                              SpectrumID)
+                     VALUES(?, ?, ?, ?)"""
+            energy = pickle.dumps(newspectrum["Energy"])
+            intensity = pickle.dumps(newspectrum["Intensity"])
+            cursor.execute(sql, (energy, intensity, "default", spectrum_id))
+            database.commit()
 
     def sid(self, spectrum):
         """searches for a spectrum and gives the ID"""
-        sql = """SELECT SpectrumID FROM Spectrum
-                 WHERE Notes=? AND EISRegion=? AND Filename=? AND Sweeps=?
-                 AND DwellTime=? AND PassEnergy=?"""
-        values = tuple(spectrum[key] for key in self.spectrum_keys[1:-1])
-        ids = self.query(sql, values)
-        if len(ids) < 1:
-            print("Did not find {0}".format(spectrum))
-            return None
-        if len(ids) == 1:
-            return ids[0][0]
-        if len(ids) > 1:
-            print("Found multiple IDs for spectrum {0}:\n"
-                  "{1}".format(spectrum, ids))
-            return ids[0][0]
+        with sqlite3.connect(self.dbfilename) as database:
+            cursor = database.cursor()
+            sql = """SELECT SpectrumID FROM Spectrum
+                     WHERE Notes=? AND EISRegion=? AND Filename=? AND Sweeps=?
+                     AND DwellTime=? AND PassEnergy=?"""
+            values = tuple(spectrum[key] for key in self.spectrum_keys[1:-1])
+            cursor.query(sql, values)
+            ids = cursor.fetchall()
+            if len(ids) < 1:
+                print("Did not find {0}".format(spectrum))
+                return None
+            if len(ids) == 1:
+                return ids[0][0]
+            if len(ids) > 1:
+                print("Found multiple IDs for spectrum {0}:\n"
+                      "{1}".format(spectrum, ids))
+                return ids[0][0]
 
 
 if __name__ == "__main__":
