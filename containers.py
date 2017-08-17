@@ -46,10 +46,12 @@ class SpectrumContainer(list):
         self.write_to_db()
         self.dbhandler.change_dbfile(dbname)
 
-    def show_only(self, spectrum_to_show):
+    def show_only(self, spectra_to_show):
         """sets all visibility values to None except for one"""
+        if isinstance(spectra_to_show, Spectrum):
+            spectra_to_show = [spectra_to_show]
         for spectrum in self:
-            if spectrum == spectrum_to_show:
+            if spectrum in spectra_to_show:
                 spectrum.plot()
             else:
                 spectrum.unplot()

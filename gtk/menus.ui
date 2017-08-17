@@ -35,6 +35,11 @@
 			<attribute name="label">_Edit</attribute>
 			<section>
 				<item>
+					<attribute name="label">_Add spectrum</attribute>
+					<attribute name="action">app.add_spectrum</attribute>
+					<attribute name="accel">&lt;Primary&gt;a</attribute>
+				</item>
+				<item>
 					<attribute name="label">_Edit spectrum</attribute>
 					<attribute name="action">app.edit_spectrum</attribute>
 					<attribute name="accel">&lt;Primary&gt;e</attribute>
@@ -64,24 +69,28 @@
 			<section>
 				<item>
 					<attribute name="label">Abou_t</attribute>
-					<attribute name="action">app.about</attribute>
+					<attribute name="action">win.about</attribute>
 				</item>
 			</section>
 		</submenu>
 	</menu>
-	<menu id="treeview_menu">
+<!--
+	<menu id="tview_menu">
 		<item>
 			<attribute name="label">Show selected</attribute>
-			<attribute name="action">app.show_selected</attribute>
+			<attribute name="action">win.show_selected</attribute>
 		</item>
 		<item>
 			<attribute name="label">Edit spectrum</attribute>
 			<attribute name="action">app.edit_spectrum</attribute>
 		</item>
 	</menu>
+-->
+<!--
 	<menu id="appmenu">
 		<submenu>
 			<attribute name="label">Test</attribute>
 		</submenu>
 	</menu>
+-->
 </interface>
