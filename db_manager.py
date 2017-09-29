@@ -9,6 +9,7 @@ import numpy as np
 from containers import Spectrum, SpectrumContainer
 
 BASEDIR = "/home/simon/npl/.npl"
+XYDIR = os.path.join(BASEDIR, "xyfiles")
 
 
 class FileParser():
@@ -62,6 +63,7 @@ class FileParser():
 
     def unpack_eistxt(self, fname):
         """splits Omicron EIS txt file"""
+        
         splitregex = re.compile(r"^Region.*")
         skipregex = re.compile(r"^[0-9]*\s*False\s*0\).*")
         fnamelist = []
@@ -70,29 +72,28 @@ class FileParser():
             for line in eisfile:
                 if re.match(splitregex, line):
                     splitcount += 1
-                    wname = "{0}/{1}-{2}.xym".format(BASEDIR,
+                    wname = "{0}/{1}-{2}.xym".format(XYDIR,
                                                      os.path.basename(fname),
                                                      str(splitcount).zfill(2))
-#                     print("+++ {}".format(wname))
                     xyfile = open(wname, 'w')
                     fnamelist.append(wname)
                     skip = False
                 elif re.match(skipregex, line):
                     skip = True
+                elif splitcount == 0:
+                    raise TypeError("wrong file, not matching EIS format")
                 if not skip:
                     xyfile.write(line)
         return fnamelist
 
 
 class DBHandler():
-    """handles basic database accessing"""
-#     to do: better performance by opening and closing the dbfile less
+    """ handles basic database accessing """
     spectrum_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
                      "DwellTime", "PassEnergy", "Visibility"]
 
     def __init__(self, dbfilename="npl.db"):
         self.dbfilename = os.path.join(BASEDIR, dbfilename)
-        self.create_tables()
 
     def query(self, sql, parameters):
         """queries db"""
@@ -147,8 +148,8 @@ class DBHandler():
     def wipe_tables(self):
         """drops em hard"""
         with sqlite3.connect(self.dbfilename) as database:
-            sqls = ["DROP TABLE Spectrum",
-                    "DROP TABLE SpectrumData"]
+            sqls = ["DROP TABLE IF EXISTS Spectrum",
+                    "DROP TABLE IF EXISTS SpectrumData"]
             cursor = database.cursor()
             for sql in sqls:
                 cursor.execute(sql, ())
@@ -162,7 +163,7 @@ class DBHandler():
             sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename,
                      Sweeps, DwellTime, PassEnergy, Visibility
                      FROM Spectrum"""
-            spectrum_container = SpectrumContainer(self)
+            spectrum_container = SpectrumContainer()
             cursor.execute(sql, ())
             spectra = cursor.fetchall()
             for spectrum in spectra:
@@ -198,7 +199,6 @@ class DBHandler():
     def change_dbfile(self, new_filename):
         """change db filename"""
         self.dbfilename = new_filename
-        self.create_tables()
 
     def remove_dbfile(self):
         """trashes db file"""
@@ -270,7 +270,7 @@ class DBHandler():
                      WHERE Notes=? AND EISRegion=? AND Filename=? AND Sweeps=?
                      AND DwellTime=? AND PassEnergy=?"""
             values = tuple(spectrum[key] for key in self.spectrum_keys[1:-1])
-            cursor.query(sql, values)
+            cursor.execute(sql, values)
             ids = cursor.fetchall()
             if len(ids) < 1:
                 print("Did not find {0}".format(spectrum))
@@ -283,8 +283,51 @@ class DBHandler():
                 return ids[0][0]
 
 
+class RSFHandler():
+    """ handles rsf library business """
+    def __init__(self, filename):
+        self.filename = filename
+        self.color = 0
+        self.colors = "rbgcmy"
+        self.elements = []
+        self.source = ""
+
+    def get_element(self, element, source):
+        """ gets binding energies, rsf and orbital name for specific
+        element """
+        self.elements.append(element.title())
+        if self.source == "":
+            self.source = source
+        elif self.source != source:
+            print("multiple sources requested from RSFHandler!")
+
+        with sqlite3.connect(self.filename) as rsfbase:
+            cursor = rsfbase.cursor()
+            sql = """SELECT Fullname, IsAuger, BE, RSF FROM Peak
+                     WHERE Element=? AND (Source=? OR Source=?)"""
+            values = (element.title(), source, "Any")
+            cursor.execute(sql, values)
+            rsf_data = cursor.fetchall()
+            rsf_dicts = []
+            for dataset in rsf_data:
+                auger_bool = dataset[1] == 1.0
+                rsf_dicts.append({"Fullname": dataset[0], "IsAuger": auger_bool,
+                                  "BE": dataset[2], "RSF": dataset[3],
+                                  "color": self.colors[self.color]})
+            self.color += 1
+            if self.color > 5: self.color = 0
+            return rsf_dicts
+
+    def reset(self):
+        self.color = 0
+        self.elements = []
+        self.source = ""
+
+
 if __name__ == "__main__":
     pass
+    h = RSFHandler("rsf.db")
+    print(h.get_element("O", "Al"))
 #     dbh = DBHandler("test.npl")
 #     dbh.wipe_tables()
 
@@ -304,21 +347,3 @@ if __name__ == "__main__":
 #     dbh.add_spectrum(Spectrum(parseds[1]))
 #     print(dbh.sid(Spectrum(parseds[1])))
 #     print(dbh.get_container())
-
-
-#                    """CREATE TABLE Region
-#                       (RegionID integer,
-#                        SpectrumDataID integer,
-#                        PRIMARY KEY (RegionID),
-#                        FOREIGN KEY (SpectrumDataID) REFERENCES
-#                                    SpectrumData(SpectrumDataID))""",
-#                    """CREATE TABLE Peak
-#                       (PeakID integer,
-#                        RegionID integer,
-#                        RSFID integer,
-#                        PRIMARY KEY (PeakID),
-#                        FOREIGN KEY (RegionID) REFERENCES Region(RegionID),
-#                        FOREIGN KEY (RSFID) REFERENCES RSF(RSFID))""",
-#                    """CREATE TABLE RSF
-#                       (RSFID integer,
-#                       PRIMARY KEY (RSFID))"""]

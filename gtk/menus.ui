@@ -15,14 +15,14 @@
 					<attribute name="accel">&lt;Primary&gt;o</attribute>
 				</item>
 				<item>
-					<attribute name="label">Save _as...</attribute>
+					<attribute name="label">_Save</attribute>
 					<attribute name="action">app.save</attribute>
-					<attribute name="accel">&lt;Primary&gt;&lt;Shift&gt;s</attribute>
+					<attribute name="accel">&lt;Primary&gt;s</attribute>
 				</item>
 				<item>
-					<attribute name="label">_Save</attribute>
+					<attribute name="label">Save _as...</attribute>
 					<attribute name="action">app.save_as</attribute>
-					<attribute name="accel">&lt;Primary&gt;s</attribute>
+					<attribute name="accel">&lt;Primary&gt;&lt;Shift&gt;s</attribute>
 				</item>
 				<item>
 					<attribute name="label">_Quit</attribute>
@@ -38,6 +38,11 @@
 					<attribute name="label">_Add spectrum</attribute>
 					<attribute name="action">app.add_spectrum</attribute>
 					<attribute name="accel">&lt;Primary&gt;a</attribute>
+				</item>
+				<item>
+					<attribute name="label">_Remove spectrum</attribute>
+					<attribute name="action">app.remove_spectrum</attribute>
+					<attribute name="accel">&lt;Primary&gt;r</attribute>
 				</item>
 				<item>
 					<attribute name="label">_Edit spectrum</attribute>
@@ -59,6 +64,10 @@
 			<attribute name="label">_Appearence</attribute>
 			<section>
 				<item>
+					<attribute name="label">_Plot selected spectra</attribute>
+					<attribute name="action">win.show_selected</attribute>
+				</item>
+				<item>
 					<attribute name="label">_Axes options</attribute>
 					<attribute name="action">app.edit_axes</attribute>
 				</item>
@@ -68,29 +77,14 @@
 			<attribute name="label">_Help</attribute>
 			<section>
 				<item>
+					<attribute name="label">debugging_func</attribute>
+					<attribute name="action">win.debug</attribute>
+				</item>
+				<item>
 					<attribute name="label">Abou_t</attribute>
 					<attribute name="action">win.about</attribute>
 				</item>
 			</section>
 		</submenu>
 	</menu>
-<!--
-	<menu id="tview_menu">
-		<item>
-			<attribute name="label">Show selected</attribute>
-			<attribute name="action">win.show_selected</attribute>
-		</item>
-		<item>
-			<attribute name="label">Edit spectrum</attribute>
-			<attribute name="action">app.edit_spectrum</attribute>
-		</item>
-	</menu>
--->
-<!--
-	<menu id="appmenu">
-		<submenu>
-			<attribute name="label">Test</attribute>
-		</submenu>
-	</menu>
--->
 </interface>
