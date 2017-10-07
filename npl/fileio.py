@@ -1,4 +1,3 @@
-#!/usr/bin/python3.5
 """manages database file"""
 
 import sqlite3
@@ -6,7 +5,7 @@ import re
 import os
 import pickle
 import numpy as np
-from containers import Spectrum, SpectrumContainer
+from npl.containers import Spectrum, SpectrumContainer
 
 BASEDIR = "/home/simon/npl/.npl"
 XYDIR = os.path.join(BASEDIR, "xyfiles")
@@ -288,7 +287,7 @@ class RSFHandler():
     def __init__(self, filename):
         self.filename = filename
         self.color = 0
-        self.colors = "rbgcmy"
+        self.colors = "grcmy"
         self.elements = []
         self.source = ""
 
@@ -315,35 +314,10 @@ class RSFHandler():
                                   "BE": dataset[2], "RSF": dataset[3],
                                   "color": self.colors[self.color]})
             self.color += 1
-            if self.color > 5: self.color = 0
+            if self.color >= len(self.colors): self.color = 0
             return rsf_dicts
 
     def reset(self):
         self.color = 0
         self.elements = []
         self.source = ""
-
-
-if __name__ == "__main__":
-    pass
-    h = RSFHandler("rsf.db")
-    print(h.get_element("O", "Al"))
-#     dbh = DBHandler("test.npl")
-#     dbh.wipe_tables()
-
-#     parser = FileParser()
-#     prs = list()
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-01.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-02.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-03.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     for dat in prs:
-#         if dat is not None:
-#             dbh.add_spectrum(Spectrum(dat))
-#     dbh.amend_spectrum(2, prs[1])
-#     dbh.change_dbfile("test2.db")
-#     dbh.add_spectrum(Spectrum(parseds[1]))
-#     print(dbh.sid(Spectrum(parseds[1])))
-#     print(dbh.get_container())

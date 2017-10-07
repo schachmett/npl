@@ -1,50 +1,12 @@
-#!/usr/bin/python3.5
 """data containers"""
 
-# import db_manager as dbm
 import numpy as np
-
-
-def main():
-    """main stuff"""
-    pass
-#     dbh = dbm.DBHandler("test.db")
-#     dbh.wipe_tables()
-#     cont = SpectrumContainer(dbh)
-
-#     parser = dbm.FileParser()
-#     prs = list()
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-01.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-02.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     datafname = "/home/simon/npl/.npl/Au111-cleaning.txt-03.xym"
-#     prs.extend(parser.parse_spectrum_file(datafname))
-#     for par in prs:
-#         spec = Spectrum(par)
-#         cont.append(spec)
-#     cont.save_as("bla.npl")
 
 
 class SpectrumContainer(list):
     """parses database for convenient use from the UI"""
-#     to do: ID assignment
     def __init__(self):
         super().__init__()
-#         self.dbhandler = dbhandler
-
-#     def write_to_db(self):
-#         """writes self to database"""
-#         idlist = self.dbhandler.save_container(self)
-#         for i, sid in enumerate(idlist):
-#             self[i]["SpectrumID"] = sid
-
-#     def save_as(self, fname):
-#         """saves itself to database of name fname"""
-#         dbname = self.dbhandler.dbfilename
-#         self.dbhandler.change_dbfile(fname)
-#         self.write_to_db()
-#         self.dbhandler.change_dbfile(dbname)
 
     def show_only(self, spectra_to_show):
         """sets all visibility values to None except for one"""
@@ -100,7 +62,3 @@ class Spectrum(dict):
             except KeyError:
                 return False
         return True
-
-
-if __name__ == "__main__":
-    main()
