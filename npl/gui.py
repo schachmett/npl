@@ -1,102 +1,44 @@
 """this module manages the windows of npl"""
+# pylint: disable=C0413
 
 import os
-import sys
 import re
-import json
+
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib, Gio, GdkPixbuf
 from matplotlib.backends.backend_gtk3 import NavigationToolbar2GTK3
+
 from npl import __appname__, __version__, __authors__, __config__
 from npl.fileio import FileParser, DBHandler, RSFHandler
 from npl.drawer import Plotter
 from npl.containers import Spectrum, SpectrumContainer
 
 
-def main():
-    """ main shit """
-    dbm = DBHandler()
-    cont = SpectrumContainer()
-    parser = FileParser()
-    
-    app = Npl(container=cont, parser=parser, dbhandler=dbm)
-
-    if __config__.get("io", "project_file") != "None":
-        try:
-            app.open_silently(__config__.get("io", "project_file"))
-        except FileNotFoundError:
-            print("file '{}' not found".format(__config__.get("io", "project_file")))
-
-    exit_status = app.run(sys.argv)
-    sys.exit(exit_status)
-
-
-# def read_settings(settings_path):
-#     settings_path = os.path.abspath(settings_path)
-#     default_settings = {"project_file": None,
-#                         "win_xsize": 1200,
-#                         "win_ysize": 700,
-#                         "basedir": os.path.dirname(settings_path),
-#                         "settingsfile": os.path.basename(settings_path),
-#                         "codedir": os.path.dirname(os.path.realpath(__file__))}
-#     if not os.path.isdir(os.path.dirname(settings_path)):
-#         os.mkdir(os.path.dirname(settings_path))
-#     if not os.path.isfile(settings_path):
-#         settings = default_settings
-#         with open(settings_path, "w") as sfile:
-#             json.dump(settings, sfile, indent=4)
-#     else:
-#         with open(settings_path, "r") as sfile:
-#             settings = json.load(sfile)
-#         for key in default_settings:
-#             if key not in settings:
-#                 settings[key] = default_settings[key]
-#     return settings
-
-
-# def write_settings(settings):
-#     fname = os.path.join(settings["basedir"], settings["settingsfile"])
-#     if not os.path.isdir(settings["basedir"]):
-#         os.mkdir(settings["basedir"])
-#     with open(fname, "w") as sfile:
-#         json.dump(settings, sfile, indent=4)
-
-
 class Npl(Gtk.Application):
-    # TODO make settings an argument, hand app down to every other class instead
-    # of window, container and such. that way every part of the program knows
-    # this class -> everything, including settings (-> displaying options on canvas)
-    # Also, no more globals needed, only main() needs to know basedir etc
+    # pylint: disable=W0221
     """ application class """
-    def __init__(self, container=None, parser=None, dbhandler=None):
+    def __init__(self):
         super().__init__(application_id="org.npl.app",
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        GLib.set_application_name("NPL")
-        if container is None:
-            self.s_container = SpectrumContainer()
-        else:
-            self.s_container = container
-        if parser is None:
-            self.parser = FileParser()
-        else:
-            self.parser = parser
-        if dbhandler is None:
-            self.dbhandler = DBHandler()
-        else:
-            self.dbhandler = dbhandler
+        GLib.set_application_name(__appname__)
+
+        self.s_container = SpectrumContainer()
+        self.parser = FileParser()
+        self.dbhandler = DBHandler()
+
         self.dbfilename = None
         self.win = None
 
         self.add_main_option("test", ord("t"), GLib.OptionFlags.NONE,
                              GLib.OptionArg.NONE, "cmd test", None)
 
-    def do_activate(self, **_ignore):
+    def do_activate(self):
         """ activates window? """
         self.win = MainWindow(app=self)
         self.win.show_all()
 
-    def do_startup(self, **_ignore):
+    def do_startup(self):
         """ startup stuff, for now only menu bar """
         Gtk.Application.do_startup(self)
 
@@ -123,7 +65,7 @@ class Npl(Gtk.Application):
             __config__.get("general", "basedir"), "gtk/menus.ui"))
         self.set_menubar(builder.get_object("menubar"))
 
-    def do_command_line(self, command_line, **_ignore):
+    def do_command_line(self, command_line):
         """ handles command line arguments """
         options = command_line.get_options_dict()
         if options.contains("test"):
@@ -132,23 +74,21 @@ class Npl(Gtk.Application):
         return 0
 
     def ask_for_save(self, container):
-        if len(container) == 0:
+        """ opens a AskForSaveDialog and runs the appropriate methods,
+        then returns True if user really wants to close current file """
+        if not container:
             return True
         dialog = AskForSaveDialog(self.win)
         response = dialog.run()
         if response == Gtk.ResponseType.YES:
             dialog.destroy()
             is_saved = self.do_save()
-            if is_saved:
-                return True
-            else:
-                return False
-        elif response == Gtk.ResponseType.NO:
+            return is_saved
+        if response == Gtk.ResponseType.NO:
             dialog.destroy()
             return True
-        else:
-            dialog.destroy()
-            return False
+        dialog.destroy()
+        return False
 
     def do_new(self, *_ignore):
         """ start new project """
@@ -198,7 +138,7 @@ class Npl(Gtk.Application):
             self.do_save()
         dialog.destroy()
 
-    def do_open(self, *_ignore):
+    def do_open_project(self, *_ignore):
         """ opens project from a file """
         really_do_it = self.ask_for_save(self.s_container)
         if not really_do_it:
@@ -222,6 +162,8 @@ class Npl(Gtk.Application):
         dialog.destroy()
 
     def open_silently(self, fname):
+        """ opens a project silently, e. g. for opening the last project at
+        startup """
         self.s_container.clear()
         self.dbfilename = fname
         self.dbhandler.change_dbfile(self.dbfilename)
@@ -237,15 +179,14 @@ class Npl(Gtk.Application):
                                        ("_Cancel", Gtk.ResponseType.CANCEL,
                                         "_Open", Gtk.ResponseType.OK))
         dialog.set_select_multiple(True)
-        dialog.add_filter(self.file_chooser_filter("all files", ["*.xym", "*.txt",
-                                                            "*.xy"]))
+        dialog.add_filter(self.file_chooser_filter("all files",
+                                                   ["*.xym", "*.txt", "*.xy"]))
         dialog.add_filter(self.file_chooser_filter(".xym", ["*.xym"]))
         dialog.add_filter(self.file_chooser_filter(".txt", ["*.txt"]))
 
         parseds = list()
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            fnames = dialog.get_filenames()
             for fname in dialog.get_filenames():
                 if fname.split(".")[-1] in ["xym", "txt"]:
                     parseds.extend(self.parser.parse_spectrum_file(fname))
@@ -323,6 +264,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.cvs.refresh(keepaxes)
 
     def refresh(self):
+        """ refreshes window components """
         self.refresh_treeview()
         self.refresh_canvas()
 
@@ -335,25 +277,30 @@ class MainWindow(Gtk.ApplicationWindow):
         aboutdialog.set_version(__version__)
         aboutdialog.set_license_type(Gtk.License.GPL_3_0)
         aboutdialog.set_logo(GdkPixbuf.Pixbuf.new_from_file_at_scale(
-            os.path.join(__config__.get("general", "basedir"), "icons/logo.svg"),
+            os.path.join(__config__.get("general", "basedir"),
+                         "icons/logo.svg"),
             50, -1, True))
         aboutdialog.connect("response", self.on_close_dialog)
         aboutdialog.show()
 
     def do_debug(self, *_ignore):
-        print("test")
+        """ allows for testing stuff from gui """
+        print(self)
 
     def do_show_rsf(self, *_ignore):
+        """ calls the canvasbox method to show rsf values in plot """
         self.cvs.on_show_rsf()
 
     def do_select_energyrange(self, *_ignore):
+        """ calls canvasbox method to select an energy range """
         self.cvs.on_select_energyrange()
 
     def do_show_selected(self, *_ignore):
         """ plots spectra that are selected in the treeview """
         self.sview.on_show_selected()
 
-    def on_close_dialog(self, action, *_ignore):
+    @staticmethod
+    def on_close_dialog(action, *_ignore):
         """ closes the action (e.g. dialog) """
         action.destroy()
 
@@ -368,21 +315,20 @@ class ToolBar(Gtk.Toolbar):
         context.add_class(Gtk.STYLE_CLASS_PRIMARY_TOOLBAR)
 
         self.toolitems = (
-                ("document-new", self.app, "do_new"),
-                ("document-save", self.app,  "do_save"),
-                ("document-save-as", self.app,  "do_save_as"),
-                ("document-open", self.app,  "do_open"),
-                (None, None, None),
-                ("list-add", self.app,  "do_add_spectrum"),
-                ("list-remove", self.app,  "do_remove_spectrum"),
-                (None, None, None),
-                (os.path.join(__config__.get("general", "basedir"),
-                              "icons/elements3.png"),
-                    self.parent, "do_show_rsf"),
-                (os.path.join(__config__.get("general", "basedir"),
-                              "icons/xrangesel.png"),
-                    self.parent, "do_select_energyrange")
-            )
+            ("document-new", self.app, "do_new"),
+            ("document-save", self.app, "do_save"),
+            ("document-save-as", self.app, "do_save_as"),
+            ("document-open", self.app, "do_open_project"),
+            (None, None, None),
+            ("list-add", self.app, "do_add_spectrum"),
+            ("list-remove", self.app, "do_remove_spectrum"),
+            (None, None, None),
+            (os.path.join(__config__.get("general", "basedir"),
+                          "icons/elements3.png"),
+             self.parent, "do_show_rsf"),
+            (os.path.join(__config__.get("general", "basedir"),
+                          "icons/xrangesel.png"),
+             self.parent, "do_select_energyrange"))
         for icon_name, class_, callback in self.toolitems:
             if icon_name is None:
                 self.insert(Gtk.SeparatorToolItem(), -1)
@@ -488,7 +434,7 @@ class SpectrumView(Gtk.Box):
         """ applies new filter """
         col_title = combo.get_active_text()
         search_term = entry.get_text()
-        if col_title is None or len(search_term) == 0:
+        if col_title is None or not search_term:
             self.current_filter = None
         else:
             col_index = self.col_titles.index(col_title)
@@ -499,11 +445,10 @@ class SpectrumView(Gtk.Box):
         """ returns true for entries that should still show """
         if self.current_filter is None:
             return True
-        else:
-            col_index = self.current_filter[0]
-            search_term = self.current_filter[1]
-            regex = re.compile(r".*{0}.*".format(search_term), re.IGNORECASE)
-            return re.match(regex, model[iter_][col_index])
+        col_index = self.current_filter[0]
+        search_term = self.current_filter[1]
+        regex = re.compile(r".*{0}.*".format(search_term), re.IGNORECASE)
+        return re.match(regex, model[iter_][col_index])
 
     def on_row_clicked(self, treeview, event):
         """ click events inside treeview:
@@ -516,10 +461,10 @@ class SpectrumView(Gtk.Box):
             path, _col, _cellx, _celly = pathinfo
         else:
             return
-        iter_ = self.liststore.get_iter(path)
         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
             self.menu.popup(None, None, None, None, event.button, event.time)
             return path in self.selection.get_selected_rows()[1]
+        # pylint: disable=W0212
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
             self.on_show_selected()
             return True
@@ -557,12 +502,11 @@ class SpectrumView(Gtk.Box):
             user_input = dialog.get_user_input()
             for spectrum in spectra:
                 for key, value in user_input:
-                    if dialog.excluding_key not in value and value is not "":
+                    if dialog.excluding_key not in value and value != "":
                         spectrum[key] = value
         self.refresh()
         dialog.destroy()
 
-    
     def get_selected_spectra(self, *_ignore):
         """ gives the selected spectra to the plotter """
         model, pathlist = self.selection.get_selected_rows()
@@ -579,13 +523,14 @@ class EditSpectrumDialog(Gtk.Dialog):
     excluding_key = " (multiple)"
     spectrum_keys = SpectrumView.col_keys
     spectrum_titles = SpectrumView.col_titles
-    
+
     def __init__(self, parent, spectra):
         super().__init__("Settings", parent, 0,
                          ("_Cancel", Gtk.ResponseType.CANCEL,
                           "_OK", Gtk.ResponseType.OK))
         self.set_size_request(500, -1)
-        okbutton = self.get_widget_for_response(response_id=Gtk.ResponseType.OK)
+        okbutton = self.get_widget_for_response(
+            response_id=Gtk.ResponseType.OK)
         okbutton.set_can_default(True)
         okbutton.grab_default()
         self.spectra = spectra
@@ -598,7 +543,8 @@ class EditSpectrumDialog(Gtk.Dialog):
         self.box = self.get_content_area()
         fnamebox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         fname_title_label = Gtk.Label(label="Filename(s):", width_chars=15)
-        fnames = "\n".join(list(str(spectrum["Filename"]) for spectrum in self.spectra))
+        fnames = "\n".join(list(
+            str(spectrum["Filename"]) for spectrum in self.spectra))
         fnames_label = Gtk.Label(label=fnames)
         fnamebox.pack_start(fname_title_label, False, False, 10)
         fnamebox.pack_start(fnames_label, True, True, 10)
@@ -630,9 +576,8 @@ class EditSpectrumDialog(Gtk.Dialog):
         """ gives the values that the user put in as a list of tuples:
         [(key, new_value), (key2, new_value2), ...] """
         user_input = list()
-        for spectrum in self.spectra:
-            for i, key in enumerate(self.spectrum_keys):
-                user_input.append((key, self.entries[i].get_text()))
+        for i, key in enumerate(self.spectrum_keys):
+            user_input.append((key, self.entries[i].get_text()))
         return user_input
 
 
@@ -643,7 +588,8 @@ class AskForSaveDialog(Gtk.Dialog):
                          ("_Cancel", Gtk.ResponseType.CANCEL,
                           "_No", Gtk.ResponseType.NO,
                           "_Yes", Gtk.ResponseType.YES))
-        yesbutton = self.get_widget_for_response(response_id=Gtk.ResponseType.YES)
+        yesbutton = self.get_widget_for_response(
+            response_id=Gtk.ResponseType.YES)
         yesbutton.set_can_default(True)
         yesbutton.grab_default()
         self.box = self.get_content_area()
@@ -660,10 +606,11 @@ class SelectElementsDialog(Gtk.Dialog):
         super().__init__("Element Library", parent, 0,
                          ("_Cancel", Gtk.ResponseType.CANCEL,
                           "_OK", Gtk.ResponseType.OK))
-        okbutton = self.get_widget_for_response(response_id=Gtk.ResponseType.OK)
+        okbutton = self.get_widget_for_response(
+            response_id=Gtk.ResponseType.OK)
         okbutton.set_can_default(True)
         okbutton.grab_default()
-        
+
         self.box = self.get_content_area()
         self.source_combo = Gtk.ComboBoxText()
         self.source_combo.set_entry_text_column(0)
@@ -681,10 +628,12 @@ class SelectElementsDialog(Gtk.Dialog):
         self.elements_entry.set_text(" ".join(default_elements))
 
         rowbox1 = Gtk.Box()
-        rowbox1.pack_start(Gtk.Label("Source", width_chars=15), False, False, 10)
+        rowbox1.pack_start(Gtk.Label("Source", width_chars=15),
+                           False, False, 10)
         rowbox1.pack_start(self.source_combo, True, True, 10)
         rowbox2 = Gtk.Box()
-        rowbox2.pack_start(Gtk.Label("Elements", width_chars=15), False, False, 10)
+        rowbox2.pack_start(Gtk.Label("Elements", width_chars=15),
+                           False, False, 10)
         rowbox2.pack_start(self.elements_entry, True, True, 10)
         self.box.pack_start(rowbox1, False, False, 2)
         self.box.pack_start(rowbox2, False, False, 2)
@@ -712,8 +661,7 @@ class Canvas(Gtk.Box):
         self.pack_start(navbar, False, False, 0)
 
         self.rsfhandler = RSFHandler(
-            os.path.join(__config__.get("general", "basedir"), "rsf.db")
-            )
+            os.path.join(__config__.get("general", "basedir"), "rsf.db"))
 
         self.refresh()
 
@@ -722,6 +670,8 @@ class Canvas(Gtk.Box):
         self.plotter.plot(self.app.s_container, keepaxes)
 
     def on_show_rsf(self):
+        """ makes a SelectElementsDialog and hands the user input to the
+        plotter """
         dialog = SelectElementsDialog(self.app.win, self.rsfhandler.source,
                                       self.rsfhandler.elements)
         response = dialog.run()
@@ -735,6 +685,7 @@ class Canvas(Gtk.Box):
         dialog.destroy()
 
     def on_select_energyrange(self):
+        """ calls the plotter energy range selector method """
         self.plotter.get_xrange()
 
 
@@ -760,6 +711,6 @@ class MPLNavBar(NavigationToolbar2GTK3):
         if self._views.empty():
             self.push_current()
         self.plotter.recenter_view()
-        self.mainwindow.refresh_canvas()
+        self.parent.refresh_canvas()
         self.push_current()
         self._update_view()

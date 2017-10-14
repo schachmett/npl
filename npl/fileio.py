@@ -37,7 +37,8 @@ class FileParser():
         """parses rsf library"""
         pass
 
-    def parse_xymfile(self, fname):
+    @staticmethod
+    def parse_xymfile(fname):
         """parses Omicron split txt file"""
         data = dict()
         data["Filename"] = fname
@@ -60,9 +61,9 @@ class FileParser():
         else:
             return data
 
-    def unpack_eistxt(self, fname):
+    @staticmethod
+    def unpack_eistxt(fname):
         """splits Omicron EIS txt file"""
-        
         splitregex = re.compile(r"^Region.*")
         skipregex = re.compile(r"^[0-9]*\s*False\s*0\).*")
         fnamelist = []
@@ -310,14 +311,18 @@ class RSFHandler():
             rsf_dicts = []
             for dataset in rsf_data:
                 auger_bool = dataset[1] == 1.0
-                rsf_dicts.append({"Fullname": dataset[0], "IsAuger": auger_bool,
-                                  "BE": dataset[2], "RSF": dataset[3],
+                rsf_dicts.append({"Fullname": dataset[0],
+                                  "IsAuger": auger_bool,
+                                  "BE": dataset[2],
+                                  "RSF": dataset[3],
                                   "color": self.colors[self.color]})
             self.color += 1
-            if self.color >= len(self.colors): self.color = 0
+            if self.color >= len(self.colors):
+                self.color = 0
             return rsf_dicts
 
     def reset(self):
+        """ resets color, source and list of used elements """
         self.color = 0
         self.elements = []
         self.source = ""

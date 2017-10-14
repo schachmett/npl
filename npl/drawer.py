@@ -1,4 +1,5 @@
 """ manages the canvas """
+# pylint: disable=C0413
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -14,20 +15,20 @@ class Plotter():
                "Mg": 1253.4}
 
     def __init__(self):
-        self.fig = plt.figure(figsize=(10, 10), dpi=80)
-        self.axes = self.fig.add_axes([0, 0, 1, 1])
-        self.canvas = FigureCanvasGTK3Cairo(self.fig)
+        fig = plt.figure(figsize=(10, 10), dpi=80)
+        self.axes = fig.add_axes([0, 0, 1, 1])
+        self.canvas = FigureCanvasGTK3Cairo(fig)
         self.spec_xy = [np.inf, -np.inf, np.inf, -np.inf]
         self.act_xy = [0, 0, 1, 1]
         self.container = []
-        
+
         self.rsfdicts = []
         self.source = None
 
-        self.xrange1 = None
-        self.xrange2 = None
+        self.sel = None
+        self.xrange_values = [None, None]
 
-        self.axes.tick_params(axis='both', which='major', pad=-20)
+        # self.axes.tick_params(axis='both', which='major', pad=-20)
         self.axes.invert_xaxis()
 
     def get_canvas(self):
@@ -70,7 +71,7 @@ class Plotter():
 
     def beautify(self):
         """ makes axes ticks great again and such """
-        if len(self.container) == 0:
+        if not self.container:
             plt.tick_params(reset=True,
                             axis="both",
                             which="both",
@@ -95,10 +96,11 @@ class Plotter():
             self.source = source
         if dicts is not None:
             self.rsfdicts = dicts
-        if len(self.rsfdicts) == 0 or self.source is None:
+        if not self.rsfdicts or self.source is None:
             return
-                
-        normfactor = self.act_xy[3] / max([(x["RSF"] + 1e-9) for x in self.rsfdicts]) * 0.8
+
+        max_rsf = max([(x["RSF"] + 1e-9) for x in self.rsfdicts])
+        normfactor = (self.act_xy[3] / max_rsf * 0.8)
         for peak in self.rsfdicts:
             if peak["IsAuger"]:
                 rsf = self.act_xy[3] * 0.5
@@ -120,27 +122,29 @@ class Plotter():
         self.sel = XRangeSelector(self)
         self.sel.connect("changed", self.change_xrange)
 
-    def change_xrange(self, selector, x1, x2):
-        self.xrange1 = x1
-        self.xrange2 = x2
+    def change_xrange(self, _selector, x_1, x_2):
+        """ changes x range plot information and then plots it """
+        self.xrange_values = [x_1, x_2]
         self.plot()
-        
+
     def plot_xrange(self):
-        if self.xrange1 is None and self.xrange2 is None:
+        """ plots the selected x range as two -- lines """
+        if self.xrange_values == [None, None]:
             return
-        self.axes.plot([self.xrange1, self.xrange1],
-                       [self.act_xy[2], self.act_xy[3]],
+        self.axes.plot([self.xrange_values[0], self.xrange_values[0]],
+                       [self.act_xy[2:4]],
                        c="k",
                        ls="--",
                        lw=2)
-        if self.xrange2 is not None:
-            self.axes.plot([self.xrange2, self.xrange2],
-                           [self.act_xy[2], self.act_xy[3]],
+        if self.xrange_values[1] is not None:
+            self.axes.plot([self.xrange_values[1], self.xrange_values[1]],
+                           [self.act_xy[2:4]],
                            c="k",
                            ls="--",
                            lw=2)
 
     def change_rsf(self, source, dicts):
+        """ changes rsf plotting parameters and then plots again """
         self.source = source
         self.rsfdicts = dicts
         self.plot()
@@ -165,30 +169,37 @@ class XRangeSelector(GObject.GObject):
         super().__init__()
         self.plotter = plotter
         self.canvas = self.plotter.get_canvas()
-        self.press_handle = self.canvas.mpl_connect("button_press_event", self.on_press)
-        self.release_handle = self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.press_handle = self.canvas.mpl_connect("button_press_event",
+                                                    self.on_press)
+        self.release_handle = self.canvas.mpl_connect("button_release_event",
+                                                      self.on_release)
 
-        self.x1 = None
-        self.x2 = None
+        self.x_1 = None
+        self.x_2 = None
 
     def on_press(self, event):
-        delta_x = self.plotter.act_xy[2] - self.plotter.act_xy[0]
-        if event.button == 1 and self.x1 is None:
-            self.x1 = event.xdata
-            self.emit("changed", self.x1, self.x2)
+        """ pressing the mouse button records x position as x1 if that is not
+        already set """
+        if event.button == 1 and self.x_1 is None:
+            self.x_1 = event.xdata
+            self.emit("changed", self.x_1, self.x_2)
 
     def on_release(self, event):
+        """ releasing the mouse button either replaces x1 if it is very near
+        or sets x2 if it is further away not already set """
         if event.button == 1:
-            if self.x1 is None:
+            if self.x_1 is None:
                 return
-            delta_x = self.plotter.act_xy[2] - self.plotter.act_xy[0]
-            if abs(event.xdata - self.x1) <= delta_x / 100:
-                self.x1  = event.xdata
-                self.emit("changed", self.x1, self.x2)
-            elif self.x2 is None or abs(event.xdata - self.x2) <= delta_x / 100:
-                self.x2 = event.xdata
-                self.emit("changed", self.x1, self.x2)
+            max_x = self.plotter.act_xy[2] - self.plotter.act_xy[0] / 100
+            delta_x = abs(event.xdata - self.x_2)
+            if delta_x < max_x:
+                self.x_1 = event.xdata
+                self.emit("changed", self.x_1, self.x_2)
+            elif self.x_2 is None or delta_x < max_x:
+                self.x_2 = event.xdata
+                self.emit("changed", self.x_1, self.x_2)
 
-    def disconnect(self):
+    def disconnect_from_canvas(self):
+        """ disconnects from the canvas signals """
         self.canvas.mpl_disconnect(self.press_handle)
         self.canvas.mpl_disconnect(self.release_handle)
