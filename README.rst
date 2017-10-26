@@ -1,4 +1,4 @@
 NPL
 ---
 
-README not yet implemented
+Documentation will follow

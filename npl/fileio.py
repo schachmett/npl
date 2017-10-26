@@ -1,14 +1,14 @@
 """manages database file"""
 
-import sqlite3
 import re
 import os
 import pickle
-import numpy as np
-from npl.containers import Spectrum, SpectrumContainer
+import sqlite3
 
-BASEDIR = "/home/simon/npl/.npl"
-XYDIR = os.path.join(BASEDIR, "xyfiles")
+import numpy as np
+
+from npl.containers import Spectrum, SpectrumContainer
+from npl import __config__
 
 
 class FileParser():
@@ -56,10 +56,9 @@ class FileParser():
         data["Notes"] = header[1][12]
         data["Visibility"] = None
         data["Name"] = str()
-        if header[3][0] is not "1":
+        if header[3][0] != "1":
             return None
-        else:
-            return data
+        return data
 
     @staticmethod
     def unpack_eistxt(fname):
@@ -72,9 +71,10 @@ class FileParser():
             for line in eisfile:
                 if re.match(splitregex, line):
                     splitcount += 1
-                    wname = "{0}/{1}-{2}.xym".format(XYDIR,
-                                                     os.path.basename(fname),
-                                                     str(splitcount).zfill(2))
+                    wname = ("{0}/{1}-{2}.xym"
+                             "".format(__config__.get("general", "xydir"),
+                                       os.path.basename(fname),
+                                       str(splitcount).zfill(2)))
                     xyfile = open(wname, 'w')
                     fnamelist.append(wname)
                     skip = False
@@ -92,8 +92,8 @@ class DBHandler():
     spectrum_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
                      "DwellTime", "PassEnergy", "Visibility"]
 
-    def __init__(self, dbfilename="npl.db"):
-        self.dbfilename = os.path.join(BASEDIR, dbfilename)
+    def __init__(self, dbfilename="untitled.npl"):
+        self.dbfilename = dbfilename
 
     def query(self, sql, parameters):
         """queries db"""

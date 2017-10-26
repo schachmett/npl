@@ -34,4 +34,5 @@ setup(name="npl",
           "Programming Language :: Python :: 3",
           "Environment :: X11 Applications :: GTK",
           "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-          "Topic :: Scientific/Engineering :: Physics"])
+          "Topic :: Scientific/Engineering :: Physics"],
+      include_package_data=True)

@@ -1,9 +1,7 @@
-__pycache__
-npl/__pycache__
+*.pyc
+dist/
+*.egg-info
+*.egg
 .old_stuff
-.npl
-*~
-*.xy
-*.xym
+.npl/
 *.npl
-*.txt
