@@ -13,7 +13,8 @@ from npl import __appname__, __version__, __authors__, __config__
 from npl.fileio import FileParser, DBHandler, RSFHandler
 from npl.drawer import Plotter
 from npl.containers import Spectrum, SpectrumContainer
-from npl.gui_treeview import SpectrumView, TreeViewFilterBar
+from npl.gui_treeview import (SpectrumView, TreeViewFilterBar,
+                              SpectrumContextMenu)
 #, SpectrumContextMenu
 
 
@@ -39,6 +40,13 @@ class Npl(Gtk.Application):
     def do_activate(self):
         """Creates MainWindow."""
         self.win = MainWindow(app=self)
+        if __config__.get("io", "project_file") != "None":
+            try:
+                self.open_silently(__config__.get("io", "project_file"))
+            except FileNotFoundError:
+                print("file '{}' not found"
+                      "".format(__config__.get("io", "project_file")))
+                __config__.set("io", "project_file", "None")
         self.win.show_all()
 
     def do_startup(self):
@@ -51,6 +59,7 @@ class Npl(Gtk.Application):
                    ("open", self.do_open_project),
                    ("add_spectrum", self.do_add_spectrum),
                    ("remove_spectrum", self.do_remove_spectrum),
+                   ("edit_spectrum", self.do_edit_spectrum),
                    ("quit", self.do_quit))
         for name, callback in actions:
             simple = Gio.SimpleAction.new(name, None)
@@ -94,6 +103,7 @@ class Npl(Gtk.Application):
         if really_do_it:
             self.win.sview.model.clear()
             self.s_container.clear()
+            self.s_container.altered = False
             self.win.refresh()
             self.dbfilename = None
             __config__.set("io", "project_file", "None")
@@ -190,11 +200,22 @@ class Npl(Gtk.Application):
 
     def do_remove_spectrum(self, *_ignore):
         """Removes selected spectra from the container."""
-        spectra = self.win.sview.get_selected_spectra()
+        spectra = self.win.get_selected_spectra()
         for spectrum in spectra:
             self.s_container.remove(spectrum)
-        self.s_container.altered = False
+        self.s_container.altered = True
         self.win.refresh()
+
+    def do_edit_spectrum(self, *_ignore):
+        """Edits spectrum spectrum."""
+        spectra = self.win.get_selected_spectra()
+        if not spectra:
+            return
+        dialog = EditSpectrumDialog(self.win, spectra)
+        response = dialog.run()
+        if response == Gtk.ResponseType.OK:
+            self.s_container.altered = dialog.change_values()
+        dialog.destroy()
 
     def do_quit(self, *_ignore):
         """Quit program, write to config file."""
@@ -217,35 +238,43 @@ class MainWindow(Gtk.ApplicationWindow):
         self.set_size_request(xsize, ysize)
         self.set_icon_from_file(os.path.join(basedir, "icons/logo.svg"))
 
-        self.sview = SpectrumView(self.app.s_container)
-        self.filterbar = TreeViewFilterBar(self.sview, "Notes")
-        # self.cvs = Canvas(self.app, self)
-        self.toolbar = ToolBar(self.app, self)
-        self.build_window()
-        # self.add(self.sview)
-        # self.add(self.filterbar)
-
-
-        actions = (("about", self.do_about),
-                   #    ("show_selected", self.do_show_selected),
-                   ("debug", self.do_debug))
-        for (name, callback) in actions:
+        context_actions = [("Edit spectrum", self.app, "do_edit_spectrum"),
+                           ("debug", self, "do_debug")]
+        actions = (("about", self, "do_about"),
+                   ("show_selected", self, "do_show_selected"),
+                   ("debug", self, "do_debug"))
+        for (name, class_, callback) in actions:
             simple = Gio.SimpleAction.new(name, None)
-            simple.connect("activate", callback)
+            simple.connect("activate", getattr(class_, callback))
             self.add_action(simple)
 
+        self.toolbar = ToolBar(self.app, self)
+
+        self.sview = SpectrumView(self.app.s_container)
+        self.sview.menu = SpectrumContextMenu(self.sview, context_actions)
+        self.filterbar = TreeViewFilterBar(self.sview, "Notes")
+
+        self.cvs = Canvas(self.app, self)
+
+        self.build_window()
+
     def build_window(self):
-        """ do gtk boxing stuff """
-        masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        """Pack the widgets into boxes."""
+        sviewbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        scrollable = Gtk.ScrolledWindow()
+        scrollable.set_property("min-content-width", 300)
+        scrollable.add(self.sview)
+        sviewbox.pack_start(scrollable, True, True, 0)
+        sviewbox.pack_start(self.filterbar, False, False, 0)
+
         contentpanes = Gtk.HPaned()
         contentpanes.shrink = False
-        masterbox.pack_start(self.toolbar, False, False, 0)
-        masterbox.pack_start(contentpanes, True, True, 0)
-        sviewbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        sviewbox.pack_start(self.sview, True, True, 0)
-        sviewbox.pack_start(self.filterbar, False, False, 0)
         contentpanes.pack1(sviewbox, False, False)
         contentpanes.pack2(Gtk.Box(), True, False)
+
+        masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        masterbox.pack_start(self.toolbar, False, False, 0)
+        masterbox.pack_start(contentpanes, True, True, 0)
         self.add(masterbox)
 
     def refresh_canvas(self, keepaxes=False):
@@ -280,8 +309,8 @@ class MainWindow(Gtk.ApplicationWindow):
         aboutdialog.show()
 
     def do_debug(self, *_ignore):
-        """ allows for testing stuff from gui """
-        self.app.s_container[4].set("Notes", "nothing")
+        """Allows for testing stuff from GUI."""
+        self.app.s_container[0].set("Notes", "nothing")
         # self.sview.filter_by("Notes", "detail")
         # print(value)
 
@@ -295,13 +324,19 @@ class MainWindow(Gtk.ApplicationWindow):
         # self.cvs.on_select_energyrange()
         pass
 
-    # def do_show_selected(self, *_ignore):
-    #     """ plots spectra that are selected in the treeview """
-    #     self.sview.on_show_selected()
+    def do_show_selected(self, *_ignore):
+        """Plots spectra that are selected in the SpectrumView."""
+        spectra = self.get_selected_spectra()
+        self.app.s_container.show_only(spectra)
+        self.refresh_canvas(keepaxes=False)
+
+    def get_selected_spectra(self, *_ignore):
+        """Returns the spectra currently selected in the SpectrumView."""
+        return self.sview.get_selected_spectra()
 
 
 class ToolBar(Gtk.Toolbar):
-    """ main toolbar for file operations """
+    """Main toolbar for file operations."""
     def __init__(self, app, parent):
         super().__init__()
         self.app = app
@@ -338,246 +373,79 @@ class ToolBar(Gtk.Toolbar):
             tbutton.connect("clicked", getattr(class_, callback))
 
 
-# class SpectrumView(Gtk.Box):
-#     """ treeview containing spectrum information """
-# #         To do: make reorderable work (for dragging/dropping list items)
-# #         treeview.set_reorderable(True)
-# #         treeview.connect("drag_data_received", self.on_test)
-#
-#     col_keys = ["Name", "Notes", "Sweeps", "DwellTime", "PassEnergy"]
-#     col_titles = ["Name", "Notes", "Sweeps", "Dwell [s]", "Pass [eV]"]
-#     maincol = col_titles.index("Notes")
-#
-#     def __init__(self, app):
-#         super().__init__(orientation=Gtk.Orientation.VERTICAL)
-#         self.app = app
-#         self.liststore = None
-#         self.model = self.create_model()
-#         self.current_filter = None
-#         self.menu = self.build_context_menu()
-#         self.treeview = self.build_treeview()
-#         self.treeview.set_enable_search(True)
-#         self.treeview.set_search_column(1)
-#
-#         scrollable = Gtk.ScrolledWindow()
-#         scrollable.set_property("min-content-width", 300)
-#         scrollable.add(self.treeview)
-#         filterbar = self.build_filterbar()
-#         self.pack_start(scrollable, True, True, 0)
-#         self.pack_start(filterbar, False, False, 0)
-#
-# DONE    def create_model(self):
-#         """ create liststore and load it with the given spectrum keys as well
-#         as the spectrum itself, then wrap a filtermodel and a modelsort
-#         around it """
-#         number_of_cols = len(self.col_keys)
-#         types = [str, ] * number_of_cols + [object]
-#         self.liststore = Gtk.ListStore(*types)
-#         for spectrum in self.app.s_container:
-#             row = [str(spectrum[key]) for key in self.col_keys] + [spectrum]
-#             self.liststore.append(row)
-#         self.filter_model = self.liststore.filter_new()
-#         self.filter_model.set_visible_func(self.spectrum_filter_func)
-#         sorted_model = Gtk.TreeModelSort(self.filter_model)
-#         return sorted_model
-#
-# DONE    def build_treeview(self):
-#         """ builds treeview with columns and fills in the model """
-#         self.model = self.create_model()
-#         treeview = Gtk.TreeView.new_with_model(self.model)
-#         self.selection = treeview.get_selection()
-#         self.selection.set_mode(Gtk.SelectionMode.MULTIPLE)
-#         treeview.set_rules_hint(True)
-#         treeview.connect("button-press-event", self.on_row_clicked)
-#         for i, col_title in enumerate(self.col_titles):
-#             renderer = Gtk.CellRendererText()
-#             column = Gtk.TreeViewColumn(col_title, renderer, text=i)
-#           column.set_cell_data_func(renderer, self.populate_cell, col_title)
-#             column.set_sort_column_id(i)
-#             column.set_resizable(True)
-#             column.set_reorderable(True)
-#             treeview.append_column(column)
-#         return treeview
-#
-# DONE    def populate_cell(self, _col, renderer, treemodel, iter_, col_title):
-#         """ renders the cell from a spectrum object """
-#         col_key = self.col_keys[self.col_titles.index(col_title)]
-#         value = treemodel[iter_][-1][col_key]
-#         renderer.set_property("text", str(value))
-#
-# NOTNEEDED    def refresh(self, *_ignore):
-#         """ makes new treemodel from the container and gives it to the
-#         treeview """
-#         self.model = self.create_model()
-#         self.treeview.set_model(self.model)
-#
-# DONE    def build_filterbar(self):
-#         """ builds the widget on the bottom for filtering the entries """
-#         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
-#         box.set_size_request(-1, 30)
-#         criterion_combo = Gtk.ComboBoxText()
-#         criterion_combo.set_entry_text_column(0)
-#         for colname in self.col_titles:
-#             criterion_combo.append_text(colname)
-#         criterion_combo.set_active(self.maincol)
-#         criterion_entry = Gtk.Entry()
-#         # self.treeview.set_search_entry(criterion_entry)
-#         criterion_entry.connect("changed", self.on_filter_criterion_changed,
-#                                 criterion_combo)
-#         box.pack_start(criterion_combo, False, False, 0)
-#         box.pack_start(criterion_entry, True, True, 0)
-#         return box
-#
-# DONE    def on_filter_criterion_changed(self, entry, combo):
-#         """ applies new filter """
-#         # return
-#         col_title = combo.get_active_text()
-#         search_term = entry.get_text()
-#         if col_title is None or not search_term:
-#             self.current_filter = None
-#         else:
-#             col_index = self.col_titles.index(col_title)
-#             self.current_filter = (col_index, search_term)
-#         self.filter_model.refilter()
-#
-# DONE    def spectrum_filter_func(self, model, iter_, _data):
-#         """ returns true for entries that should still show """
-#         if self.current_filter is None:
-#             return True
-#         col_index = self.current_filter[0]
-#         search_term = self.current_filter[1]
-#         regex = re.compile(r".*{0}.*".format(search_term), re.IGNORECASE)
-#         return re.match(regex, model[iter_][col_index])
-#
-# DONE    def on_row_clicked(self, treeview, event):
-#         """ click events inside treeview:
-#       right click: context menu for amending spectrum / showing selected etc
-#         double click: plot single spectrum """
-#         posx = int(event.x)
-#         posy = int(event.y)
-#         pathinfo = treeview.get_path_at_pos(posx, posy)
-#         if pathinfo is not None:
-#             path, _col, _cellx, _celly = pathinfo
-#         else:
-#             return
-#         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
-#             self.menu.popup(None, None, None, None, event.button, event.time)
-#             return path in self.selection.get_selected_rows()[1]
-#         # pylint: disable=W0212
-#         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
-#             self.on_show_selected()
-#             return True
-#
-# DONE    def build_context_menu(self):
-#         """ builds the right click menu """
-#         menu = Gtk.Menu()
-#         show_selected_action = Gtk.MenuItem("Show selected")
-#         menu.append(show_selected_action)
-#         show_selected_action.connect("activate", self.on_show_selected)
-#         show_selected_action.show()
-#         edit_action = Gtk.MenuItem("Edit spectrum")
-#         menu.append(edit_action)
-#         edit_action.connect("activate", self.on_edit_spectrum)
-#         edit_action.show()
-#         return menu
-#
-#     def on_show_selected(self, *_action):
-#         """ gives the selected spectra to the plotter """
-#         spectra = self.get_selected_spectra()
-#         self.app.s_container.show_only(spectra)
-#         self.app.win.refresh_canvas(keepaxes=False)
-#
-#     def on_edit_spectrum(self, _action):
-#         """ edits fields in the spectrum thorugh a EditSpectrumDialog and
-#         refreshes """
-#         model, pathlist = self.selection.get_selected_rows()
-#         spectra = []
-#         for path in pathlist:
-#             iter_ = model.get_iter(path)
-#             spectra.append(model[iter_][-1])
-#         dialog = EditSpectrumDialog(self.app.win, spectra)
-#         response = dialog.run()
-#         if response == Gtk.ResponseType.OK:
-#             user_input = dialog.get_user_input()
-#             for spectrum in spectra:
-#                 for key, value in user_input:
-#                     if dialog.excluding_key not in value and value != "":
-#                         spectrum[key] = value
-#         self.refresh()
-#         dialog.destroy()
-#
-# DONE    def get_selected_spectra(self, *_ignore):
-#         """ gives the selected spectra to the plotter """
-#         model, pathlist = self.selection.get_selected_rows()
-#         spectra = []
-#         for path in pathlist:
-#             iter_ = model.get_iter(path)
-#             spectra.append(model[iter_][-1])
-#         return spectra
+class EditSpectrumDialog(Gtk.Dialog):
+    """Shows a dialog with entries to change metadata, needs a parent and
+    a list of spectra."""
+    excluding_key = " (multiple)"
 
+    def __init__(self, parent, spectra, keys=None):
+        super().__init__("Settings", parent, 0,
+                         ("_Cancel", Gtk.ResponseType.CANCEL,
+                          "_OK", Gtk.ResponseType.OK))
+        if not spectra:
+            self.response(Gtk.ResponseType.CANCEL)
+            return
+        self.set_size_request(500, -1)
+        okbutton = self.get_widget_for_response(
+            response_id=Gtk.ResponseType.OK)
+        okbutton.set_can_default(True)
+        okbutton.grab_default()
 
-# class EditSpectrumDialog(Gtk.Dialog):
-#     """ shows a dialog with entries to change metadata, needs a parent and
-#     a list of spectra """
-#     excluding_key = " (multiple)"
-#     spectrum_keys = SpectrumView.col_keys
-#     spectrum_titles = SpectrumView.col_titles
-#
-#     def __init__(self, parent, spectra):
-#         super().__init__("Settings", parent, 0,
-#                          ("_Cancel", Gtk.ResponseType.CANCEL,
-#                           "_OK", Gtk.ResponseType.OK))
-#         self.set_size_request(500, -1)
-#         okbutton = self.get_widget_for_response(
-#             response_id=Gtk.ResponseType.OK)
-#         okbutton.set_can_default(True)
-#         okbutton.grab_default()
-#         self.spectra = spectra
-#         self.entries = list()
-#         if len(spectra) == 1:
-#             self.multiple = False
-#         else:
-#             self.multiple = True
-#
-#         self.box = self.get_content_area()
-#         fnamebox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-#         fname_title_label = Gtk.Label(label="Filename(s):", width_chars=15)
-#         fnames = "\n".join(list(
-#             str(spectrum["Filename"]) for spectrum in self.spectra))
-#         fnames_label = Gtk.Label(label=fnames)
-#         fnamebox.pack_start(fname_title_label, False, False, 10)
-#         fnamebox.pack_start(fnames_label, True, True, 10)
-#         self.box.pack_start(fnamebox, False, False, 5)
-#         for key in SpectrumView.col_keys:
-#             self.box.pack_start(self.generate_entry(key), False, False, 2)
-#         self.show_all()
-#
-#     def generate_entry(self, key):
-#         """ makes an entry for the dialog """
-#         if not self.multiple:
-#             value = str(self.spectra[0][key])
-#         else:
-#             values = []
-#             for spectrum in self.spectra:
-#                 values.append(str(spectrum[key]))
-#             value = " | ".join(set(values)) + self.excluding_key
-#         labelstring = self.spectrum_titles[self.spectrum_keys.index(key)]
-#         rowbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-#         label = Gtk.Label(label=labelstring, width_chars=15)
-#         entry = Gtk.Entry(text=value)
-#         entry.set_activates_default(True)
-#         self.entries.append(entry)
-#         rowbox.pack_start(label, False, False, 10)
-#         rowbox.pack_start(entry, True, True, 10)
-#         return rowbox
-#
-#     def get_user_input(self):
-#         """ gives the values that the user put in as a list of tuples:
-#         [(key, new_value), (key2, new_value2), ...] """
-#         user_input = list()
-#         for i, key in enumerate(self.spectrum_keys):
-#             user_input.append((key, self.entries[i].get_text()))
-#         return user_input
+        if keys is not None:
+            self.titles = [(key, spectra[0].titles[key]) for key in keys]
+        else:
+            self.titles = [(key, title)
+                           for key, title in spectra[0].titles.items()]
+
+        self.spectra = spectra
+        self.entries = list()
+        self.multiple = len(spectra) != 1
+        self.box = self.get_content_area()
+
+        fnamebox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        fname_title_label = Gtk.Label(label="Filename(s):", width_chars=15)
+        fnames = "\n".join(list(str(spectrum["Filename"])
+                                for spectrum in self.spectra))
+        fnames_label = Gtk.Label(label=fnames)
+        fnamebox.pack_start(fname_title_label, False, False, 10)
+        fnamebox.pack_start(fnames_label, True, True, 10)
+        self.box.pack_start(fnamebox, False, False, 5)
+
+        for (key, title) in self.titles:
+            self.box.pack_start(self.generate_entry(key, title),
+                                False, False, 2)
+        self.show_all()
+
+    def generate_entry(self, key, title):
+        """Makes an entry with a specific title for a spectrum key."""
+        if not self.multiple:
+            value = str(self.spectra[0].get(key))
+        else:
+            values = []
+            for spectrum in self.spectra:
+                values.append(str(spectrum.get(key)))
+            value = " | ".join(set(values)) + self.excluding_key
+
+        label = Gtk.Label(label=title, width_chars=15)
+        entry = Gtk.Entry(text=value)
+        entry.set_activates_default(True)
+        self.entries.append(entry)
+
+        rowbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        rowbox.pack_start(label, False, False, 10)
+        rowbox.pack_start(entry, True, True, 10)
+        return rowbox
+
+    def change_values(self):
+        """Actually changes the values of the spectra."""
+        altered = False
+        for spectrum in self.spectra:
+            for i, (key, _title) in enumerate(self.titles):
+                new_value = self.entries[i].get_text()
+                if self.excluding_key not in new_value:
+                    spectrum.set(key, new_value)
+                    altered = True
+        return altered
 
 
 class AskForSaveDialog(Gtk.Dialog):
@@ -638,7 +506,7 @@ class SelectElementsDialog(Gtk.Dialog):
         self.show_all()
 
     def get_user_input(self):
-        """ gives elements and Sources selected """
+        """Gives elements and Sources selected."""
         source = self.source_combo.get_active_text()
         elementstring = self.elements_entry.get_text()
         elements = re.findall(r"[\w]+", elementstring)
@@ -647,7 +515,7 @@ class SelectElementsDialog(Gtk.Dialog):
 
 
 class Canvas(Gtk.Box):
-    """ plotting area box """
+    """Plotting area box."""
     def __init__(self, app, parent):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.app = app
@@ -688,7 +556,7 @@ class Canvas(Gtk.Box):
 
 
 class MPLNavBar(NavigationToolbar2GTK3):
-    """ navbar for the canvas """
+    """Navbar for the canvas."""
     def __init__(self, plotter, parent):
         self.plotter = plotter
         self.parent = parent

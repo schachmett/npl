@@ -7,8 +7,6 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GObject, Gdk
 
-from npl.containers import Spectrum
-
 
 class SpectrumView(Gtk.TreeView):
     """Treeview that connects to the SpectrumModel, is filterable and
@@ -20,12 +18,13 @@ class SpectrumView(Gtk.TreeView):
     def __init__(self, container, titles=None, app=None):
         super().__init__()
         self.app = app
-        self.model = SpectrumModel(container)
+        self.model = SpectrumModelContainerIface(container=container,
+                                                 keys=container.keys)
         self.filter_model = self.model.filter_new()
         self.sortable_model = Gtk.TreeModelSort(self.filter_model)
-        self.menu = SpectrumContextMenu(self, app=self.app)
+        self.menu = None
 
-        self.set_model(self.model)
+        self.set_model(self.sortable_model)
         self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
         self.set_rules_hint(True)
 
@@ -35,15 +34,18 @@ class SpectrumView(Gtk.TreeView):
         self.connect("button-press-event", self.on_row_clicked)
 
         if titles is None:
-            self.titles = [("Name", "Name"),    # list of (key, title)s
-                           ("Notes", "Notes"),
-                           ("Sweeps", "Sweeps"),
-                           ("DwellTime", "Dwell [s]"),
-                           ("PassEnergy", "Pass [eV]")]
+            used_keys = ["Name", "Notes", "Sweeps", "DwellTime", "PassEnergy"]
+            self.titles = [(key, container.titles[key]) for key in used_keys]
         else:
             self.titles = titles
         self.make_columns()
 
+    def title2key(self, title):
+        """Returns the corresponding key to a given column title."""
+        for (key, title_) in self.titles:
+            if title_ == title:
+                return key
+        return None
 
     def get_selected_spectra(self):
         """Returns list of currently selected Spectrum objects."""
@@ -79,7 +81,9 @@ class SpectrumView(Gtk.TreeView):
             return
         path, _col, _cellx, _celly = pathinfo
         if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
-            self.menu.popup(None, None, None, None, event.button, event.time)
+            if self.menu is not None:
+                self.menu.popup(None, None, None, None,
+                                event.button, event.time)
             return path in self.get_selection().get_selected_rows()[1]
         # pylint: disable=protected-access
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
@@ -93,7 +97,6 @@ class SpectrumView(Gtk.TreeView):
             model column which number in model_col_indexes corresponds
             to title."""
             col_index = self.model.get_column_from_key(key)
-            print(type(iter_), type(col_index))
             value = model.get_value(iter_, col_index)
             renderer.set_property("text", str(value))
         cellfunc = text_rendering
@@ -123,24 +126,19 @@ class SpectrumModel(GObject.GObject, Gtk.TreeModel):
             if keys is not None:
                 self.keys = keys
             else:
-                self.keys = Spectrum.essential_keys
-        self.container.bind(self, "container_callback")
+                self.keys = []
 
-    def get_spectrum(self, iter_or_path):
+    def get_spectrum(self, path):
         """Returns the spectrum for iter_or_path."""
-        if isinstance(iter_or_path, Gtk.TreeIter):
-            index = iter_or_path.user_data
-        else:
-            index = iter_or_path.get_indices()[0]
+        if isinstance(path, Gtk.TreeIter):
+            path = self.get_path(path)
+        index = path.get_indices()[0]
         return self.container[index]
 
-    def get_container_value(self, iter_, key_or_column):
-        """Returns the value by iter_ and key or column."""
-        if isinstance(key_or_column, int):
-            key = self.keys[key_or_column]
-        else:
-            key = key_or_column
-        value = self.container[iter_.user_data][key]
+    def get_value_by_key(self, iter_, key):
+        """Returns the value by iter_ and key."""
+        spectrum = self.container.get_spectrum_by_sid(iter_.user_data)
+        value = spectrum.get(key)
         return value
 
     def get_column_from_key(self, key):
@@ -150,10 +148,97 @@ class SpectrumModel(GObject.GObject, Gtk.TreeModel):
 
     def do_get_value(self, iter_, column):
         """Returns the value for iter_ and column."""
-        # if
         key = self.keys[column]
-        value = self.container[iter_.user_data][key]
+        value = self.get_value_by_key(iter_, key)
         return str(value)
+
+    def do_get_iter(self, path):
+        """Returns a new TreeIter that points at path.
+        The implementation returns a 2-tuple (bool, TreeIter|None).
+        """
+        indices = path.get_indices()
+        iter_ = Gtk.TreeIter()
+        if indices[0] < len(self.container):
+            iter_.user_data = self.container[indices[0]].sid
+            return (True, iter_)
+        return (False, None)
+
+    def do_iter_next(self, iter_):
+        """Returns an iter pointing to the next row or None.
+        The implementation returns a 2-tuple (bool, TreeIter|None).
+        """
+        if self.container:
+            if iter_ is not None:
+                oldpath = self.container.get_idx_by_sid(iter_.user_data)
+                if oldpath is None or len(self.container) <= oldpath + 1:
+                    return (False, None)
+                if len(self.container) > oldpath + 1:
+                    iter_.user_data = self.container[oldpath + 1].sid
+            else:
+                iter_.user_data = self.container[0].sid
+            return (True, iter_)
+        return (False, None)
+
+    def do_iter_has_child(self, _iter_):
+        """True if iter_ has children."""
+        return False
+
+    def do_iter_nth_child(self, iter_, child_n):
+        """Return iter that is set to the nth child of iter_."""
+        if iter_ is None and child_n < len(self.container):
+            iter_ = Gtk.TreeIter()
+            iter_.user_data = self.container[child_n].sid
+            return (True, iter_)
+        return (False, None)
+
+    def do_get_path(self, iter_):
+        """Returns tree path references by iter_."""
+        if iter_ is not None:
+            sid = iter_.user_data
+            idx = self.container.get_idx_by_sid(sid)
+            if idx is None:
+                return None
+            path = Gtk.TreePath((idx, ))
+            return path
+        return None
+
+    def do_iter_children(self, iter_):
+        """Returns if iter has been set to the first child and that iter."""
+        if iter_ is not None or not self.container:
+            iter_.user_data = None
+            return (False, iter_)
+        iter_.user_data = self.container[0].sid
+        return (True, iter_)
+
+    def do_iter_n_children(self, iter_):
+        """Returns number of children of iter_."""
+        if iter_ is not None:
+            return 0
+        return len(self.container)
+
+    def do_iter_parent(self, _child):
+        """Returns parent of child."""
+        return None
+
+    def do_get_n_columns(self):
+        """Returns the number of columns."""
+        return len(self.keys)
+
+    def do_get_column_type(self, _column):
+        """Returns the type of the column."""
+        return str
+
+    def do_get_flags(self):
+        """Returns the flags supported by this interface."""
+        return Gtk.TreeModelFlags.ITERS_PERSIST, Gtk.TreeModelFlags.LIST_ONLY
+
+
+class SpectrumModelContainerIface(SpectrumModel):
+    """A TreeModel providing the methods to "talk" with a SpectrumContainer.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.container.bind(self, "container_callback")
 
     def container_callback(self, keyword, **kwargs):
         """Manages signals from the spectrum container."""
@@ -174,110 +259,30 @@ class SpectrumModel(GObject.GObject, Gtk.TreeModel):
 
     def append(self, spectrum):
         """Adds a spectrum to the model."""
+        if not self.keys:
+            self.keys = spectrum.essential_keys
         path = (self.container.index(spectrum), )
         iter_ = self.get_iter(path)
         self.row_inserted(path, iter_)
 
     def remove(self, iter_):
         """Removes row with iter_."""
-        if iter_:
+        if iter_ is not None:
             path = self.get_path(iter_)
             self.row_deleted(path)
 
     def amend(self, spectrum):
         """Changes a model row."""
-        iter_ = self.get_iter(self.container.index(spectrum))
+        path = (self.container.index(spectrum), )
+        iter_ = self.get_iter(path)
         self.remove(iter_)
         self.append(spectrum)
 
     def clear(self):
         """Removes every row."""
-        # iter_ = self.get_iter_first()
-        # iters = [iter_, ]
-        # while iter_ is not None:
-        #     iter_ = self.iter_next(iter_)
-        #     iters.append(iter_)
-        # for iter_ in iters[:-1]:
-        #     self.remove(iter_)
         for idx in range(len(self.container)):
-            iter_ = self.get_iter(idx)
-            print(iter_.user_data)
+            iter_ = self.get_iter((idx, ))
             self.remove(iter_)
-
-    def do_get_iter(self, path):
-        """Returns a new TreeIter that points at path.
-        The implementation returns a 2-tuple (bool, TreeIter|None).
-        """
-        if isinstance(path, Gtk.TreePath):
-            indices = path.get_indices()
-        else:
-            indices = [path]
-        print(indices)
-        if indices[0] < len(self.container):
-            iter_ = Gtk.TreeIter()
-            iter_.user_data = indices[0]
-            return (True, iter_)
-        return (False, None)
-
-    def do_iter_next(self, iter_):
-        """Returns an iter pointing to the next column or None.
-        The implementation returns a 2-tuple (bool, TreeIter|None).
-        """
-        if iter_.user_data is None and self.container:
-            iter_.user_data = 0
-            return (True, iter_)
-        if iter_.user_data < len(self.container) - 1:
-            iter_.user_data += 1
-            return (True, iter_)
-        return (False, None)
-
-    def do_iter_has_child(self, _iter_):
-        """True if iter_ has children."""
-        return False
-
-    def do_iter_nth_child(self, iter_, child_n):
-        """Return iter that is set to the nth child of iter_."""
-        # We've got a flat list here, so iter_ is always None and the
-        # nth child is the row.
-        if iter_ is None:
-            iter_ = Gtk.TreeIter()
-            iter_.user_data = child_n
-            return (True, iter_)
-        return (False, None)
-
-    def do_get_path(self, iter_):
-        """Returns tree path references by iter_."""
-        if iter_.user_data is not None:
-            path = Gtk.TreePath((iter_.user_data,))
-            return path
-        return None
-
-    def do_iter_children(self, iter_):
-        """Returns if iter has been set to the first child and that iter."""
-        if not iter_.user_data is None and self.container:
-            iter_.user_data = 0
-            return (True, iter_)
-        return (False, None)
-
-    def do_iter_n_children(self, iter_):
-        """Returns number of children of iter_."""
-        return len(self.container) if iter_ is None else 0
-
-    def do_iter_parent(self, _child):
-        """Returns parent of child."""
-        return None
-
-    def do_get_n_columns(self):
-        """Returns the number of columns."""
-        return len(self.keys)
-
-    def do_get_column_type(self, _column):
-        """Returns the type of the column."""
-        return str
-
-    def do_get_flags(self):
-        """Returns the flags supported by this interface."""
-        return Gtk.TreeModelFlags.ITERS_PERSIST, Gtk.TreeModelFlags.LIST_ONLY
 
 
 class TreeViewFilterBar(Gtk.Box):
@@ -309,17 +314,25 @@ class TreeViewFilterBar(Gtk.Box):
         search_term = entry.get_text()
         self.sview.filter_by(key, search_term)
 
+
 class SpectrumContextMenu(Gtk.Menu):
     """Context menu for actions that depend on giving a selection of
     spectra."""
-    def __init__(self, sview, app=None):
+    def __init__(self, sview, actions):
         self.sview = sview
-        self.app = app
         super().__init__()
-        actions = (("Show selected", print),
-                   ("Foo", print))
-        for (name, callback) in actions:
+        self.actions = list(actions)
+        for (name, class_, callback) in self.actions:
             action = Gtk.MenuItem(name)
             self.append(action)
-            action.connect("activate", callback)
+            action.connect("activate", getattr(class_, callback))
+            action.show()
+
+    def add_action(self, name, class_, callback):
+        """Adds another action to the menu."""
+        self.actions.append((name, class_, callback))
+        for (_name, _class_, _callback) in self.actions:
+            action = Gtk.MenuItem(_name)
+            self.append(action)
+            action.connect("activate", getattr(_class_, _callback))
             action.show()
