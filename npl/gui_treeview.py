@@ -1,4 +1,5 @@
-"""this module manages the windows of npl"""
+"""Provides a custom Gtk.Treeview for viewing spectrum metadata and
+filtering/sorting/selecting them."""
 # pylint: disable=wrong-import-position
 
 import re
@@ -87,23 +88,22 @@ class SpectrumView(Gtk.TreeView):
             return path in self.get_selection().get_selected_rows()[1]
         # pylint: disable=protected-access
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
-            print("show selected")
+            self.menu.do_first()
             return True
 
     def make_columns(self):
         """Makes columns with given titles."""
-        def text_rendering(_col, renderer, model, iter_, key):
+        def render_text(_col, renderer, model, iter_, key):
             """Renders a cell in column with value from that
             model column which number in model_col_indexes corresponds
             to title."""
             col_index = self.model.get_column_from_key(key)
             value = model.get_value(iter_, col_index)
             renderer.set_property("text", str(value))
-        cellfunc = text_rendering
         for i, (key, title) in enumerate(self.titles):
             renderer = Gtk.CellRendererText()
             column = Gtk.TreeViewColumn(title, renderer, text=i)
-            column.set_cell_data_func(renderer, cellfunc, key)
+            column.set_cell_data_func(renderer, render_text, key)
             col_index = self.model.get_column_from_key(key)
             column.set_sort_column_id(col_index)
             column.set_resizable(True)
@@ -320,6 +320,7 @@ class SpectrumContextMenu(Gtk.Menu):
     spectra."""
     def __init__(self, sview, actions):
         self.sview = sview
+        self.doubleclick_action = None
         super().__init__()
         self.actions = list(actions)
         for (name, class_, callback) in self.actions:
@@ -336,3 +337,24 @@ class SpectrumContextMenu(Gtk.Menu):
             self.append(action)
             action.connect("activate", getattr(_class_, _callback))
             action.show()
+
+    def do_action(self, callback):
+        """Calls a given callback."""
+        for (_name, _class_, _callback) in self.actions:
+            if _callback == callback:
+                getattr(_class_, _callback)()
+                return
+
+    def set_doubleclick_action(self, name, class_, callback):
+        """Sets the action to do for double clicking an item."""
+        if (name, class_, callback) not in self.actions:
+            self.add_action(name, class_, callback)
+        self.doubleclick_action = callback
+
+    def do_first(self):
+        """Executes the first action."""
+        if self.doubleclick_action:
+            callback = self.doubleclick_action
+        else:
+            callback = self.actions[0][2]
+        self.do_action(callback)
