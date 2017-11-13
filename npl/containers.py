@@ -1,5 +1,6 @@
-""" data containers """
-# pylint: disable=C0413
+"""Provides a Spectrum class that stores all spectrum relevant data and
+metadata. Also provides SpectrumContainer, a list containing Spectrums
+and providing callback connection for changing Spectrums."""
 
 import uuid
 

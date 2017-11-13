@@ -1,4 +1,4 @@
-""" loads the configuration ini """
+"""Loads the configuration ini and sets app name and version."""
 
 import os
 import configparser
