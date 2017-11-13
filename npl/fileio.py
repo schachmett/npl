@@ -1,4 +1,4 @@
-"""manages database file"""
+"""Manages database file and has import filters."""
 
 import re
 import os
@@ -13,11 +13,8 @@ from npl import __config__
 
 class FileParser():
     """Parses arbitrary spectrum files"""
-    def __init__(self):
-        pass
-
     def parse_spectrum_file(self, fname):
-        """finds out file extension and calls appropriate parsing function"""
+        """Checks file extension and calls appropriate parsing method."""
         parseds = list()
         if fname.split(".")[-1] == "xym":
             parsed = self.parse_xymfile(fname)
@@ -33,13 +30,9 @@ class FileParser():
             print("file {} not recognized".format(fname))
         return parseds
 
-    def read_rsf_file(self):
-        """parses rsf library"""
-        pass
-
     @staticmethod
     def parse_xymfile(fname):
-        """parses Omicron split txt file"""
+        """Parses Omicron EIS split txt file."""
         data = dict()
         data["Filename"] = fname
         values = np.loadtxt(data["Filename"], delimiter="\t", comments="L",
@@ -62,7 +55,7 @@ class FileParser():
 
     @staticmethod
     def unpack_eistxt(fname):
-        """splits Omicron EIS txt file"""
+        """Splits Omicron EIS txt file."""
         splitregex = re.compile(r"^Region.*")
         skipregex = re.compile(r"^[0-9]*\s*False\s*0\).*")
         fnamelist = []
@@ -88,32 +81,28 @@ class FileParser():
 
 
 class DBHandler():
-    """ handles basic database accessing """
+    """Handles database access, opening and saving projects
+    (i.e. SpectrumContainers)"""
     spectrum_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
                      "DwellTime", "PassEnergy", "Visibility"]
 
     def __init__(self, dbfilename="untitled.npl"):
         self.dbfilename = dbfilename
 
-    def query(self, sql, parameters):
-        """queries db"""
-        with sqlite3.connect(self.dbfilename) as database:
-            cursor = database.cursor()
-            cursor.execute(sql, parameters)
-            result = cursor.fetchall()
-        return result
+    def save(self, spectrum_container, fname):
+        """Saves SpectrumContainer to fname."""
+        self.change_dbfile(fname)
+        self.wipe_tables()
+        self.save_container(spectrum_container)
 
-    def execute(self, sql, parameters):
-        """executes sql command"""
-        with sqlite3.connect(self.dbfilename) as database:
-            cursor = database.cursor()
-            cursor.execute(sql, parameters)
-            lastid = cursor.lastrowid
-            database.commit()
-        return lastid
+    def load(self, fname):
+        """Loads SpectrumContainer from fname."""
+        self.change_dbfile(fname)
+        spectrum_container = self.get_container()
+        return spectrum_container
 
     def create_tables(self):
-        """creates table via sql command if not already created"""
+        """Creates tables if not already created."""
         create_sql = ["""CREATE TABLE Spectrum
                          (SpectrumID integer,
                           Name text,
@@ -146,7 +135,7 @@ class DBHandler():
                     database.commit()
 
     def wipe_tables(self):
-        """drops em hard"""
+        """Drops tables and creates new ones."""
         with sqlite3.connect(self.dbfilename) as database:
             sqls = ["DROP TABLE IF EXISTS Spectrum",
                     "DROP TABLE IF EXISTS SpectrumData"]
@@ -157,14 +146,14 @@ class DBHandler():
         self.create_tables()
 
     def get_container(self):
-        """loads text project file to current db"""
+        """Loads project file and returns SpectrumContainer."""
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename,
                      Sweeps, DwellTime, PassEnergy, Visibility
                      FROM Spectrum"""
-            spectrum_container = SpectrumContainer()
             cursor.execute(sql, ())
+            spectrum_container = SpectrumContainer()
             spectra = cursor.fetchall()
             for spectrum in spectra:
                 sid = spectrum[0]
@@ -186,9 +175,9 @@ class DBHandler():
         return spectrum_container
 
     def save_container(self, spectrum_container):
-        """dumps current db as project text file"""
+        """Dumps SpectrumContainer as project file."""
         self.wipe_tables()
-        idlist = list()
+        idlist = []
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             for spectrum in spectrum_container:
@@ -197,16 +186,16 @@ class DBHandler():
         return idlist
 
     def change_dbfile(self, new_filename):
-        """change db filename"""
+        """Change db file name."""
         self.dbfilename = new_filename
 
     def remove_dbfile(self):
-        """trashes db file"""
+        """Trashes db file."""
         os.remove(self.dbfilename)
         self.dbfilename = None
 
     def add_spectrum(self, spectrum, cursor=None):
-        """adds new spectrum from a dict from the parser"""
+        """Adds a spectrum to the project file."""
         needs_closing = False
         if cursor is None:
             needs_closing = True
@@ -230,8 +219,8 @@ class DBHandler():
             database.close()
         return spectrum_id
 
-    def remove_spectrum(self, spectrum_id):
-        """removes spectrum"""
+    def remove_spectrum_by_sql_id(self, spectrum_id):
+        """Removes spectrum from the project file."""
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             sql = "DELETE FROM Spectrum WHERE SpectrumID=?"
@@ -241,8 +230,8 @@ class DBHandler():
             database.commit()
 
     def amend_spectrum(self, spectrum_id, newspectrum):
-        """alters spectrum"""
-        self.remove_spectrum(spectrum_id)
+        """Amends spectrum in the project file."""
+        self.remove_spectrum_by_sql_id(spectrum_id)
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
@@ -263,7 +252,7 @@ class DBHandler():
             database.commit()
 
     def sid(self, spectrum):
-        """searches for a spectrum and gives the ID"""
+        """Searches for a spectrum and gives the sql ID."""
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             sql = """SELECT SpectrumID FROM Spectrum
@@ -284,23 +273,17 @@ class DBHandler():
 
 
 class RSFHandler():
-    """ handles rsf library business """
+    """Handles rsf library."""
+    # pylint: disable=too-few-public-methods
+    k_alpha = {"Al": 1486.3,
+               "Mg": 1253.4}
+
     def __init__(self, filename):
         self.filename = filename
-        self.color = 0
-        self.colors = "grcmy"
-        self.elements = []
-        self.source = ""
 
     def get_element(self, element, source):
-        """ gets binding energies, rsf and orbital name for specific
-        element """
-        self.elements.append(element.title())
-        if self.source == "":
-            self.source = source
-        elif self.source != source:
-            print("multiple sources requested from RSFHandler!")
-
+        """Gets binding energies, rsf and orbital name for specific
+        element."""
         with sqlite3.connect(self.filename) as rsfbase:
             cursor = rsfbase.cursor()
             sql = """SELECT Fullname, IsAuger, BE, RSF FROM Peak
@@ -310,19 +293,11 @@ class RSFHandler():
             rsf_data = cursor.fetchall()
             rsf_dicts = []
             for dataset in rsf_data:
-                auger_bool = dataset[1] == 1.0
+                if dataset[1] == 1.0:
+                    energy = self.k_alpha[source] - dataset[2]
+                else:
+                    energy = dataset[2]
                 rsf_dicts.append({"Fullname": dataset[0],
-                                  "IsAuger": auger_bool,
-                                  "BE": dataset[2],
-                                  "RSF": dataset[3],
-                                  "color": self.colors[self.color]})
-            self.color += 1
-            if self.color >= len(self.colors):
-                self.color = 0
+                                  "BE": energy,
+                                  "RSF": dataset[3]})
             return rsf_dicts
-
-    def reset(self):
-        """ resets color, source and list of used elements """
-        self.color = 0
-        self.elements = []
-        self.source = ""

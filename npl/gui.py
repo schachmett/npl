@@ -1,25 +1,23 @@
-"""this module manages the windows of npl"""
+"""Main GUI module, manages the main window and the application class where
+all user accessible actions are defined."""
 # pylint: disable=wrong-import-position
 
 import os
-import re
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Gio, GLib, GdkPixbuf#, Gdk
-from matplotlib.backends.backend_gtk3 import NavigationToolbar2GTK3
+from gi.repository import Gtk, Gio, GLib, GdkPixbuf
 
 from npl import __appname__, __version__, __authors__, __config__
-from npl.fileio import FileParser, DBHandler, RSFHandler
-from npl.drawer import Plotter
+from npl.fileio import FileParser, DBHandler
 from npl.containers import Spectrum, SpectrumContainer
 from npl.gui_treeview import (SpectrumView, TreeViewFilterBar,
                               SpectrumContextMenu)
-#, SpectrumContextMenu
+from npl.gui_plotter import CanvasBox, MPLNavBar
 
 
 class Npl(Gtk.Application):
-    # pylint: disable=W0221
+    # pylint: disable=arguments-differ
     """Application class, this has all the action(s)."""
     def __init__(self):
         app_id = "org.{}.app".format(__appname__.lower())
@@ -31,7 +29,7 @@ class Npl(Gtk.Application):
         self.parser = FileParser()
         self.dbhandler = DBHandler()
 
-        self.dbfilename = None
+        self.project_fname = None
         self.win = None
 
         self.add_main_option("test", ord("t"), GLib.OptionFlags.NONE,
@@ -104,20 +102,18 @@ class Npl(Gtk.Application):
             self.win.sview.model.clear()
             self.s_container.clear()
             self.s_container.altered = False
-            self.win.refresh()
-            self.dbfilename = None
+            self.win.refresh_canvas()
+            self.project_fname = None
             __config__.set("io", "project_file", "None")
 
     def do_save(self, *_ignore):
         """Saves project, calls do_save_as if it does not already have a
         file. Returns True if successful."""
-        if self.dbfilename is None:
+        if self.project_fname is None:
             self.do_save_as()
         else:
-            self.dbhandler.change_dbfile(self.dbfilename)
-            self.dbhandler.wipe_tables()
-            self.dbhandler.save_container(self.s_container)
-            __config__.set("io", "project_file", self.dbfilename)
+            self.dbhandler.save(self.s_container, self.project_fname)
+            __config__.set("io", "project_file", self.project_fname)
             self.s_container.altered = False
             return True
 
@@ -136,7 +132,7 @@ class Npl(Gtk.Application):
             fname = dialog.get_filename()
             if fname[-4:] != ".npl":
                 fname += ".npl"
-            self.dbfilename = fname
+            self.project_fname = fname
             self.do_save()
         dialog.destroy()
 
@@ -160,13 +156,13 @@ class Npl(Gtk.Application):
     def open_silently(self, fname):
         """Opens a project file."""
         self.s_container.clear()
-        self.dbfilename = fname
-        self.dbhandler.change_dbfile(self.dbfilename)
-        container = self.dbhandler.get_container()
+        self.project_fname = fname
+        container = self.dbhandler.load(self.project_fname)
         for spectrum in container:
             self.s_container.append(spectrum)
         self.s_container.altered = False
-        __config__.set("io", "project_file", self.dbfilename)
+        __config__.set("io", "project_file", self.project_fname)
+        self.win.refresh_canvas()
 
     def do_add_spectrum(self, *_ignore):
         """Imports a spectrum file and adds it to the current container."""
@@ -204,7 +200,7 @@ class Npl(Gtk.Application):
         for spectrum in spectra:
             self.s_container.remove(spectrum)
         self.s_container.altered = True
-        self.win.refresh()
+        self.win.refresh_canvas()
 
     def do_edit_spectrum(self, *_ignore):
         """Edits spectrum spectrum."""
@@ -237,9 +233,6 @@ class MainWindow(Gtk.ApplicationWindow):
         basedir = __config__.get("general", "basedir")
         self.set_size_request(xsize, ysize)
         self.set_icon_from_file(os.path.join(basedir, "icons/logo.svg"))
-
-        context_actions = [("Edit spectrum", self.app, "do_edit_spectrum"),
-                           ("debug", self, "do_debug")]
         actions = (("about", self, "do_about"),
                    ("show_selected", self, "do_show_selected"),
                    ("debug", self, "do_debug"))
@@ -250,11 +243,18 @@ class MainWindow(Gtk.ApplicationWindow):
 
         self.toolbar = ToolBar(self.app, self)
 
+        self.canvasbox = CanvasBox(self.app, self)
+        self.mpl_navbar = MPLNavBar(self.canvasbox.figure, self)
+
+
+        context_actions = [("Show selected", self, "do_show_selected"),
+                           ("Edit spectrum", self.app, "do_edit_spectrum"),
+                           ("Show rsf", self.canvasbox, "on_show_rsf"),
+                           ("debug", self, "do_debug")]
         self.sview = SpectrumView(self.app.s_container)
         self.sview.menu = SpectrumContextMenu(self.sview, context_actions)
+        self.sview.menu.set_doubleclick_action(*context_actions[0])
         self.filterbar = TreeViewFilterBar(self.sview, "Notes")
-
-        self.cvs = Canvas(self.app, self)
 
         self.build_window()
 
@@ -270,7 +270,7 @@ class MainWindow(Gtk.ApplicationWindow):
         contentpanes = Gtk.HPaned()
         contentpanes.shrink = False
         contentpanes.pack1(sviewbox, False, False)
-        contentpanes.pack2(Gtk.Box(), True, False)
+        contentpanes.pack2(self.canvasbox, True, False)
 
         masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         masterbox.pack_start(self.toolbar, False, False, 0)
@@ -278,13 +278,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.add(masterbox)
 
     def refresh_canvas(self, keepaxes=False):
-        """ plotter refetches its info and redraws """
-        # self.cvs.refresh(keepaxes)
-        pass
-
-    def refresh(self):
-        """ refreshes window components """
-        self.refresh_canvas()
+        """Figure refetches its info and redraws."""
+        self.canvasbox.refresh(keepaxes)
 
     def do_about(self, *_args, **kwargs):
         """Show "About" dialog."""
@@ -310,7 +305,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def do_debug(self, *_ignore):
         """Allows for testing stuff from GUI."""
-        self.app.s_container[0].set("Notes", "nothing")
+        # self.app.s_container[0].set("Notes", "nothing")
+        self.refresh_canvas()
         # self.sview.filter_by("Notes", "detail")
         # print(value)
 
@@ -385,7 +381,7 @@ class EditSpectrumDialog(Gtk.Dialog):
         if not spectra:
             self.response(Gtk.ResponseType.CANCEL)
             return
-        self.set_size_request(500, -1)
+        self.set_size_request(300, -1)
         okbutton = self.get_widget_for_response(
             response_id=Gtk.ResponseType.OK)
         okbutton.set_can_default(True)
@@ -402,19 +398,29 @@ class EditSpectrumDialog(Gtk.Dialog):
         self.multiple = len(spectra) != 1
         self.box = self.get_content_area()
 
+        self.build_window()
+        self.show_all()
+
+    def build_window(self):
+        """Creates the labels and entries and orders them."""
         fnamebox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         fname_title_label = Gtk.Label(label="Filename(s):", width_chars=15)
-        fnames = "\n".join(list(str(spectrum["Filename"])
-                                for spectrum in self.spectra))
+        fnames = ""
+        for spectrum in self.spectra:
+            try:
+                fnames += spectrum["Filename"] + "\n"
+            except KeyError:
+                fnames += "unknown file name\n"
+        fnames = fnames.strip()
         fnames_label = Gtk.Label(label=fnames)
         fnamebox.pack_start(fname_title_label, False, False, 10)
         fnamebox.pack_start(fnames_label, True, True, 10)
         self.box.pack_start(fnamebox, False, False, 5)
 
         for (key, title) in self.titles:
-            self.box.pack_start(self.generate_entry(key, title),
-                                False, False, 2)
-        self.show_all()
+            if key != "Filename":
+                self.box.pack_start(self.generate_entry(key, title),
+                                    False, False, 2)
 
     def generate_entry(self, key, title):
         """Makes an entry with a specific title for a spectrum key."""
@@ -463,123 +469,6 @@ class AskForSaveDialog(Gtk.Dialog):
         text = Gtk.Label("Save changes to current project?")
         self.box.pack_start(text, True, True, 10)
         self.show_all()
-
-
-class SelectElementsDialog(Gtk.Dialog):
-    """Lets the user select elements and a source for rsf plotting."""
-    sources = ["Al", "Mg"]
-    def __init__(self, parent, default_source=None, default_elements=None):
-        super().__init__("Element Library", parent, 0,
-                         ("_Cancel", Gtk.ResponseType.CANCEL,
-                          "_OK", Gtk.ResponseType.OK))
-        okbutton = self.get_widget_for_response(
-            response_id=Gtk.ResponseType.OK)
-        okbutton.set_can_default(True)
-        okbutton.grab_default()
-
-        self.box = self.get_content_area()
-        self.source_combo = Gtk.ComboBoxText()
-        self.source_combo.set_entry_text_column(0)
-        for colname in self.sources:
-            self.source_combo.append_text(colname)
-        if default_source in self.sources:
-            idx = self.sources.index(default_source)
-            self.source_combo.set_active(idx)
-        elif default_source != "":
-            self.source_combo.append_text(default_source)
-            self.source_combo.set_active(-1)
-        else:
-            self.source_combo.set_active(0)
-        self.elements_entry = Gtk.Entry()
-        self.elements_entry.set_text(" ".join(default_elements))
-
-        rowbox1 = Gtk.Box()
-        rowbox1.pack_start(Gtk.Label("Source", width_chars=15),
-                           False, False, 10)
-        rowbox1.pack_start(self.source_combo, True, True, 10)
-        rowbox2 = Gtk.Box()
-        rowbox2.pack_start(Gtk.Label("Elements", width_chars=15),
-                           False, False, 10)
-        rowbox2.pack_start(self.elements_entry, True, True, 10)
-        self.box.pack_start(rowbox1, False, False, 2)
-        self.box.pack_start(rowbox2, False, False, 2)
-        self.show_all()
-
-    def get_user_input(self):
-        """Gives elements and Sources selected."""
-        source = self.source_combo.get_active_text()
-        elementstring = self.elements_entry.get_text()
-        elements = re.findall(r"[\w]+", elementstring)
-        elements = [element.title() for element in elements]
-        return [source, elements]
-
-
-class Canvas(Gtk.Box):
-    """Plotting area box."""
-    def __init__(self, app, parent):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL)
-        self.app = app
-        self.parent = parent
-        self.plotter = Plotter()
-
-        self.pack_start(self.plotter.get_canvas(), True, True, 0)
-        navbar = MPLNavBar(self.plotter, self.parent)
-        self.pack_start(navbar, False, False, 0)
-
-        self.rsfhandler = RSFHandler(
-            os.path.join(__config__.get("general", "basedir"), "rsf.db"))
-
-        self.refresh()
-
-    def refresh(self, keepaxes=False):
-        """ redraws canvas """
-        self.plotter.plot(self.app.s_container, keepaxes)
-
-    def on_show_rsf(self):
-        """ makes a SelectElementsDialog and hands the user input to the
-        plotter """
-        dialog = SelectElementsDialog(self.app.win, self.rsfhandler.source,
-                                      self.rsfhandler.elements)
-        response = dialog.run()
-        if response == Gtk.ResponseType.OK:
-            self.rsfhandler.reset()
-            source, elements = dialog.get_user_input()
-            rsf_dicts = []
-            for element in elements:
-                rsf_dicts.extend(self.rsfhandler.get_element(element, source))
-            self.plotter.change_rsf(source, rsf_dicts)
-        dialog.destroy()
-
-    def on_select_energyrange(self):
-        """ calls the plotter energy range selector method """
-        self.plotter.get_xrange()
-
-
-class MPLNavBar(NavigationToolbar2GTK3):
-    """Navbar for the canvas."""
-    def __init__(self, plotter, parent):
-        self.plotter = plotter
-        self.parent = parent
-        self.toolitems = (
-            ('Fullscreen', 'Fit view to data', 'home', 'fit_view'),
-            ('Back', 'Back to  previous view', 'back', 'back'),
-            ('Forward', 'Forward to next view', 'forward', 'forward'),
-            (None, None, None, None),
-            ('Pan', 'Pan axes with left mouse, zoom with right', 'move',
-             'pan'),
-            ('Zoom', 'Zoom to rectangle', 'zoom_to_rect', 'zoom'),
-            (None, None, None, None),
-            ('Save', 'Save the figure', 'filesave', 'save_figure'))
-        super().__init__(self.plotter.get_canvas(), self.parent)
-
-    def fit_view(self, _event):
-        """ centers the view to plotted graphs, mapped to home button """
-        if self._views.empty():
-            self.push_current()
-        self.plotter.recenter_view()
-        self.parent.refresh_canvas()
-        self.push_current()
-        self._update_view()
 
 
 class SimpleFileFilter(Gtk.FileFilter):
