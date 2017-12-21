@@ -23,6 +23,7 @@ setup(name="npl",
       zip_safe=False,
       requires=[
           "configparser",
+          "cairocffi",
           "json",
           "gi",
           "matplotlib",

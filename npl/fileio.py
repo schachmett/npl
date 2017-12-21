@@ -15,40 +15,40 @@ class FileParser():
     """Parses arbitrary spectrum files"""
     def parse_spectrum_file(self, fname):
         """Checks file extension and calls appropriate parsing method."""
-        parseds = list()
+        spectra = []
         if fname.split(".")[-1] == "xym":
             parsed = self.parse_xymfile(fname)
-            parseds.append(parsed)
+            spectra.append(Spectrum(**parsed))
         elif fname.split(".")[-1] == "txt":
             xymfiles = self.unpack_eistxt(fname)
             for xymfile in xymfiles:
                 parsed = self.parse_xymfile(xymfile)
-                parseds.append(parsed)
+                spectra.append(Spectrum(**parsed))
         elif fname.split(".")[-1] == "xy":
             print("parsing {} not yet implemented".format(fname))
         else:
             print("file {} not recognized".format(fname))
-        return parseds
+        return spectra
 
     @staticmethod
     def parse_xymfile(fname):
         """Parses Omicron EIS split txt file."""
         data = dict()
-        data["Filename"] = fname
-        values = np.loadtxt(data["Filename"], delimiter="\t", comments="L",
+        data["fname"] = fname
+        values = np.loadtxt(data["fname"], delimiter="\t", comments="L",
                             skiprows=5, unpack=True)
-        data["Energy"] = values[0, ::-1]
-        data["Intensity"] = values[1, ::-1]
-        with open(data["Filename"], "r") as xyfile:
+        data["energy"] = values[0, ::-1]
+        data["intensity"] = values[1, ::-1]
+        with open(data["fname"], "r") as xyfile:
             header = [x.split("\t") for i, x in enumerate(xyfile)
                       if i in range(0, 4)]
-        data["EISRegion"] = int(header[1][0])
-        data["Sweeps"] = int(header[1][6])
-        data["DwellTime"] = float(header[1][7])
-        data["PassEnergy"] = float(header[1][9])
-        data["Notes"] = header[1][12]
-        data["Visibility"] = None
-        data["Name"] = str()
+        data["eis_region"] = int(header[1][0])
+        data["sweeps"] = int(header[1][6])
+        data["dwelltime"] = float(header[1][7])
+        data["passenergy"] = float(header[1][9])
+        data["notes"] = header[1][12]
+        data["visibility"] = None
+        data["name"] = str()
         if header[3][0] != "1":
             return None
         return data
@@ -162,16 +162,16 @@ class DBHandler():
                          WHERE SpectrumID=?"""
                 cursor.execute(sql, (sid, ))
                 spectrum_data = cursor.fetchall()[0]
-                specdict = {"SpectrumID": sid, "Name": spectrum[1],
-                            "Notes": spectrum[2], "EISRegion": spectrum[3],
-                            "Filename": spectrum[4], "Sweeps": spectrum[5],
-                            "DwellTime": spectrum[6],
-                            "PassEnergy": spectrum[7],
-                            "Visibility": spectrum[8]}
+                specdict = {"sid": sid, "name": spectrum[1],
+                            "notes": spectrum[2], "eis_region": spectrum[3],
+                            "fname": spectrum[4], "sweeps": spectrum[5],
+                            "dwelltime": spectrum[6],
+                            "passenergy": spectrum[7],
+                            "visibility": spectrum[8]}
                 if spectrum_data[2] == "default":
-                    specdict["Energy"] = pickle.loads(spectrum_data[0])
-                    specdict["Intensity"] = pickle.loads(spectrum_data[1])
-                spectrum_container.append(Spectrum(specdict))
+                    specdict["energy"] = pickle.loads(spectrum_data[0])
+                    specdict["intensity"] = pickle.loads(spectrum_data[1])
+                spectrum_container.append(Spectrum(**specdict))
         return spectrum_container
 
     def save_container(self, spectrum_container):
@@ -205,14 +205,21 @@ class DBHandler():
                                       Sweeps, DwellTime, PassEnergy,
                                       Visibility)
                  VALUES(?, ?, ?, ?, ?, ?, ?, ?)"""
-        values = tuple(spectrum[key] for key in self.spectrum_keys)
+        values = (spectrum.name,
+                  spectrum.notes,
+                  spectrum.eis_region,
+                  spectrum.fname,
+                  spectrum.sweeps,
+                  spectrum.dwelltime,
+                  spectrum.passenergy,
+                  spectrum.visibility)
         cursor.execute(sql, values)
         spectrum_id = cursor.lastrowid
         sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
                                           SpectrumID)
                 VALUES(?, ?, ?, ?)"""
-        energy = pickle.dumps(spectrum["Energy"])
-        intensity = pickle.dumps(spectrum["Intensity"])
+        energy = pickle.dumps(spectrum.energy)
+        intensity = pickle.dumps(spectrum.intensity)
         cursor.execute(sql, (energy, intensity, "default", spectrum_id))
         if needs_closing:
             database.commit()
@@ -229,27 +236,27 @@ class DBHandler():
             cursor.execute(sql, (spectrum_id, ))
             database.commit()
 
-    def amend_spectrum(self, spectrum_id, newspectrum):
-        """Amends spectrum in the project file."""
-        self.remove_spectrum_by_sql_id(spectrum_id)
-        with sqlite3.connect(self.dbfilename) as database:
-            cursor = database.cursor()
-            sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
-                                          Sweeps, DwellTime, PassEnergy,
-                                          Visibility, SpectrumID)
-                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-            values = (*[newspectrum[key] for key in self.spectrum_keys],
-                      spectrum_id)
-            cursor.execute(sql, values)
-            spectrum_id = cursor.lastrowid
-
-            sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
-                                              SpectrumID)
-                     VALUES(?, ?, ?, ?)"""
-            energy = pickle.dumps(newspectrum["Energy"])
-            intensity = pickle.dumps(newspectrum["Intensity"])
-            cursor.execute(sql, (energy, intensity, "default", spectrum_id))
-            database.commit()
+    # def amend_spectrum(self, spectrum_id, newspectrum):
+    #     """Amends spectrum in the project file."""
+    #     self.remove_spectrum_by_sql_id(spectrum_id)
+    #     with sqlite3.connect(self.dbfilename) as database:
+    #         cursor = database.cursor()
+    #         sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
+    #                                       Sweeps, DwellTime, PassEnergy,
+    #                                       Visibility, SpectrumID)
+    #                  VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    #         values = (*[newspectrum[key] for key in self.spectrum_keys],
+    #                   spectrum_id)
+    #         cursor.execute(sql, values)
+    #         spectrum_id = cursor.lastrowid
+    #
+    #         sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
+    #                                           SpectrumID)
+    #                  VALUES(?, ?, ?, ?)"""
+    #         energy = pickle.dumps(newspectrum["Energy"])
+    #         intensity = pickle.dumps(newspectrum["Intensity"])
+    #         cursor.execute(sql, (energy, intensity, "default", spectrum_id))
+    #         database.commit()
 
     def sid(self, spectrum):
         """Searches for a spectrum and gives the sql ID."""
