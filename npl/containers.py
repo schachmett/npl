@@ -7,101 +7,172 @@ import uuid
 import numpy as np
 
 
-class Spectrum(dict):
-    """ stores spectrum data as an object """
-    essential_keys = ["Name", "Notes", "EISRegion", "Filename", "Sweeps",
-                      "DwellTime", "PassEnergy", "Energy", "Intensity"]
-    defaulting_dict = {"SpectrumID": None, "Visibility": None}
-    titles = {"Name": "Name",
-              "Notes": "Notes",
-              "EISRegion": "Region",
-              "Filename": "File name",
-              "Sweeps": "Sweeps",
-              "DwellTime": "Dwell [s]",
-              "PassEnergy": "Pass [eV]"}
+class Spectrum(object):
+    """Stores spectrum data.""" #TODO: incorporate regions into db
+    # pylint: disable=access-member-before-definition, no-member
+    # pylint: disable=attribute-defined-outside-init
+    _titles = {"name": "Name",
+               "notes": "Notes",
+               "eis_region": "Region",
+               "fname": "File name",
+               "sweeps": "Sweeps",
+               "dwelltime": "Dwell [s]",
+               "passenergy": "Pass [eV]"}
+    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
+                 "visibility": "",
+                 "name": "",
+                 "notes": "",
+                 "eis_region": "",
+                 "fname": "",
+                 "sweeps": 0,
+                 "dwelltime": 0,
+                 "passenergy": 0,
+                 "energy": [],
+                 "intensity": [],
+                 "regions": []}
+    attrs = sorted(list(_defaults.keys()))
 
-    def __init__(self, datadict):
-        super().__init__()
-        self.observers = []
-        for key in self.essential_keys:
-            if key not in datadict:
-                raise ValueError("missing key for Spectrum "
-                                 "init: {}".format(key))
+    def __init__(self, **kwargs):
+        self._observers = []
+        for attr in ("energy", "intensity"):
+            if attr not in kwargs:
+                raise ValueError("Missing property {}".format(attr))
+        for (attr, default) in self._defaults.items():
+            if attr in kwargs and kwargs[attr] is not None:
+                setattr(self, attr, kwargs.get(attr, default))
             else:
-                self[key] = datadict[key]
-        for key in self.defaulting_dict:
-            if key not in datadict:
-                self[key] = self.defaulting_dict[key]
-            else:
-                self[key] = datadict[key]
-        if not self["Name"]:
-            self["Name"] = "(R {0})".format(self["EISRegion"])
-        self.sid = int(uuid.uuid4()) & (1<<64)-1
+                setattr(self, attr, default)
+        if not self.name and self.eis_region:
+            self.name = "(R {})".format(self.eis_region)
 
-    def set(self, key, value):
-        """Value setter that calls all available callbacks."""
-        self[key] = value
-        for class_, callback in self.observers:
-            getattr(class_, callback)("set", spectrum=self, key=key,
-                                      value=value)
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name != "visibility":
+            for callback in self._observers:
+                callback("set", spectrum=self, attr=name, value=value)
 
-    def get(self, key):
-        """Value getter."""
-        return self[key]
+    def subscribe(self, callback):
+        """Bind a new callback to this."""
+        self._observers.append(callback)
 
-    def bind(self, class_, callback):
-        """Bind a new callback of class_ to this."""
-        self.observers.append((class_, callback))
-
-    def unbind(self, class_, callback):
+    def unsubscribe(self, callback):
         """Unbind the callback."""
-        self.observers.remove((class_, callback))
+        self._observers.remove(callback)
 
     def plot(self):
-        """ switch plotting flag on """
-        self["Visibility"] = "default"
+        """Switch plotting flag on."""
+        self.visibility += "dr"
 
     def unplot(self):
-        """ switch plotting flag off """
-        self["Visibility"] = None
+        """Switch plotting flag off."""
+        self.visibility = self.visibility.replace("d", "")
+        self.visibility = self.visibility.replace("r", "")
+
+    @staticmethod
+    def title(attr):
+        """Returns the user friendly string for an attribute."""
+        if attr in Spectrum._titles:
+            return Spectrum._titles[attr]
+        return None
 
     def __eq__(self, other):
         """ for testing equality """
-        for key in self.essential_keys + list(self.defaulting_dict.keys()):
+        for attr in self.__dict__:
             try:
-                if (isinstance(self[key], np.ndarray) or
-                        isinstance(other[key], np.ndarray)):
-                    if (self[key] != other[key]).all():
+                if (isinstance(getattr(self, attr), np.ndarray)
+                        or isinstance(getattr(other, attr), np.ndarray)):
+                    if (getattr(self, attr) != getattr(other, attr)).all():
                         return False
-                elif self[key] != other[key]:
+                elif getattr(self, attr) != getattr(other, attr):
                     return False
-            except KeyError:
+            except AttributeError:
                 return False
         return True
 
 
+class Region(object):
+    """A region is a part of a spectrum."""
+    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
+                 "name": "",
+                 "emin": None,
+                 "emax": None,
+                 "spectrum": None}
+    def __init__(self, **kwargs):
+        self._observers = []
+        for attr in ("spectrum", "emin", "emax"):
+            if attr not in kwargs:
+                raise TypeError("Missing property {}".format(attr))
+        for (attr, default) in self._defaults.items():
+            if attr in kwargs and kwargs[attr] is not None:
+                setattr(self, attr, kwargs.get(attr, default))
+            else:
+                setattr(self, attr, default)
+
+    def subtract_background(self):
+        """Returns background subtracted intensity."""
+        pass
+
+    def change_range(self, emin, emax):
+        """Changes range to emin, emax."""
+        pass
+
+
+class Peak(object):
+    """This object fits a peak in the real spectrum and is defined as part of
+    a Region."""
+    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
+                 "name": "",
+                 "region": None,
+                 "spectrum": None}
+    def __init__(self, **kwargs):
+        self._observers = []
+        for attr in ("region",):
+            if attr not in kwargs:
+                raise TypeError("Missing property {}".format(attr))
+        for (attr, default) in self._defaults.items():
+            if attr in kwargs and kwargs[attr] is not None:
+                setattr(self, attr, kwargs.get(attr, default))
+            else:
+                setattr(self, attr, default)
+
+    def set_constraint(self, constraint, value):
+        """Sets a constraint for peak fitting."""
+        pass
+
+    def set_function(self, func):
+        """Sets the fitting function."""
+        pass
+
+
 class SpectrumContainer(list):
     """ parses database for convenient use from the UI """
-    keys = Spectrum.essential_keys
-    titles = Spectrum.titles
-
+    spectrum_attrs = ["name", "sid", "visibility", "name", "notes",
+                      "eis_region", "fname", "sweeps", "dwelltime",
+                      "passenergy", "energy", "intensity"]
     def __init__(self):
         super().__init__()
         self.observers = []
         self.altered = True
+        self.title = Spectrum.title
 
     def get_spectrum_by_sid(self, sid):
         """Returns spectrum with the matching uuid."""
         for spectrum in self:
             if spectrum.sid == sid:
                 return spectrum
+            for region in spectrum.regions:
+                if region.sid == sid:
+                    return region
         return None
 
     def get_idx_by_sid(self, sid):
         """Returns spectrum with the matching uuid."""
         for idx, spectrum in enumerate(self):
             if spectrum.sid == sid:
-                return idx
+                return (idx, None)
+            for idx2, region in enumerate(spectrum.regions):
+                if region.sid == sid:
+                    return (idx, idx2)
         return None
 
     def show_only(self, spectra_to_show):
@@ -114,38 +185,41 @@ class SpectrumContainer(list):
             else:
                 spectrum.unplot()
 
+    def extend(self, spectra):
+        for spectrum in spectra:
+            self.append(spectrum)
+
     def append(self, spectrum):
         super().append(spectrum)
-        spectrum.bind(self, "spectrum_callback")
+        spectrum.subscribe(self.spectrum_callback)
         idx = self.index(spectrum)
-        for class_, callback in self.observers:
-            getattr(class_, callback)("append", spectrum=spectrum, index=idx)
+        for callback in self.observers:
+            callback("append", spectrum=spectrum, index=idx)
 
     def remove(self, spectrum):
         idx = self.index(spectrum)
-        for class_, callback in self.observers:
-            getattr(class_, callback)("remove", spectrum=spectrum, index=idx)
+        for callback in self.observers:
+            callback("remove", spectrum=spectrum, index=idx)
         super().remove(spectrum)
 
     def clear(self):
-        for class_, callback in self.observers:
-            getattr(class_, callback)("clear")
+        for callback in self.observers:
+            callback("clear")
         super().clear()
 
-    def bind(self, class_, callback):
+    def subscribe(self, callback):
         """Bind a new callback of class_ to this."""
-        self.observers.append((class_, callback))
+        self.observers.append(callback)
 
-    def unbind(self, class_, callback):
+    def unsubscribe(self, callback):
         """Unbind the callback."""
-        self.observers.remove((class_, callback))
+        self.observers.remove(callback)
 
     def spectrum_callback(self, keyword, **kwargs):
         """Manages signals from single spectra."""
         if keyword == "set":
-            for class_, callback in self.observers:
+            for callback in self.observers:
                 spectrum = kwargs["spectrum"]
-                key = kwargs["key"]
+                attr = kwargs["attr"]
                 value = kwargs["value"]
-                getattr(class_, callback)("amend", spectrum=spectrum, key=key,
-                                          value=value)
+                callback("amend", spectrum=spectrum, attr=attr, value=value)
