@@ -10,13 +10,15 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 from matplotlib.backends.backend_gtk3 import (NavigationToolbar2GTK3
                                               as NavigationToolbar)
-from matplotlib.backends.backend_gtk3cairo import (FigureCanvasGTK3Cairo
-                                                   as FigureCanvas)
+from matplotlib.backends.backend_gtk3agg import (FigureCanvasGTK3Agg
+                                                 as FigureCanvas)
 from matplotlib.figure import Figure
+from matplotlib.widgets import SpanSelector
 import numpy as np
 
 from npl import __config__
 from npl.fileio import RSFHandler
+from npl.containers import Region
 # from npl.drawer import SpectrumFigure
 
 
@@ -61,9 +63,12 @@ class CanvasBox(Gtk.Box):
             self.refresh()
         dialog.destroy()
 
-    def on_select_energyrange(self):
+    def on_select_energyrange(self, spectra):
         """Calls the plotter energy range selector method."""
-        self.figure.get_span()
+        if len(spectra) == 1:
+            self.figure.get_span(spectra[0])
+        else:
+            self.parent.message("More than one spectrum selected")
 
 
 class BeautifulFigure(Figure):
@@ -72,7 +77,7 @@ class BeautifulFigure(Figure):
         # pylint: disable=invalid-name
         super().__init__(figsize=(10, 10), dpi=80)
         self.canvas = FigureCanvas(self)
-        self.ax = self.add_axes([0, 0, 1, 1])
+        self.ax = self.add_axes([-0.01, -0.01, 1.02, 1.02])
 
         self.now_xy = [0, 0, 1, 1]
         self.s_xy = [np.inf, -np.inf, np.inf, -np.inf]
@@ -105,6 +110,11 @@ class BeautifulFigure(Figure):
             self.now_xy = self.s_xy
         self.adjust_axlims()
 
+    def plotspan(self, xmin, xmax):
+        """Draws a span."""
+        self.ax.vlines([xmin, xmax], self.now_xy[2], self.now_xy[3],
+                       colors="b", lw=1)
+
 
 class SpectrumFigure(BeautifulFigure):
     """Axes object containing the methods for plotting Spectra."""
@@ -112,24 +122,51 @@ class SpectrumFigure(BeautifulFigure):
         super().__init__()
         rsf_file = os.path.join(__config__.get("general", "basedir"), "rsf.db")
         self.rsfhandler = RSFHandler(rsf_file)
+        self.span_selector = None
+        # self.span_selector = SpanSelector(self.ax,
+        #                                   self.on_region_selected,
+        #                                   "horizontal",
+        #                                   span_stays=True,
+        #                                   useblit=True,
+        #                                   rectprops=dict(alpha=1,
+        #                                                  fill=False,
+        #                                                  edgecolor="blue",
+        #                                                  linewidth=2))
+        # self.span_selector.active = False
 
     def plot_spectra(self, container):
         """Plots a spectrum."""
         if container:
             self.s_xy = [np.inf, -np.inf, np.inf, -np.inf]
         for spectrum in container:
-            if spectrum["Visibility"] == "default":
-                self.ax.plot(spectrum["Energy"], spectrum["Intensity"],
-                             label=spectrum["Name"], c="k", lw=1)
-                self.s_xy = [min(self.s_xy[0], min(spectrum["Energy"])),
-                             max(self.s_xy[1], max(spectrum["Energy"])),
-                             min(self.s_xy[2], min(spectrum["Intensity"])),
-                             max(self.s_xy[3], max(spectrum["Intensity"]
-                                                   * 1.05))]
+            if "d" in spectrum.visibility:
+                self.ax.plot(spectrum.energy, spectrum.intensity,
+                             label=spectrum.name, c="k", lw=1)
+                self.s_xy = [min(self.s_xy[0], min(spectrum.energy)),
+                             max(self.s_xy[1], max(spectrum.energy)),
+                             min(self.s_xy[2], min(spectrum.intensity)),
+                             max(self.s_xy[3], max(spectrum.intensity * 1.05))]
+            if "r" in spectrum.visibility:
+                for region in spectrum.regions:
+                    self.ax.axvline(region.emin, 0, 1, c="blue", lw=2)
+                    self.ax.axvline(region.emax, 0, 1, c="blue", lw=2)
 
-    def get_span(self):
+    def get_span(self, spectrum):
         """Makes a SpanSelector and uses it."""
-        pass
+        def on_region_selected(emin, emax):
+            """Creates a new region in Spectrum object."""
+            region = Region(spectrum=spectrum, emin=emin, emax=emax)
+            spectrum.regions.append(region)
+            self.span_selector.active = False
+        self.span_selector = SpanSelector(self.ax,
+                                          on_region_selected,
+                                          "horizontal",
+                                          span_stays=True,
+                                          useblit=True,
+                                          rectprops=dict(alpha=1,
+                                                         fill=False,
+                                                         edgecolor="blue",
+                                                         linewidth=2))
 
     def plot_rsf(self, elements, source):
         """Plots RSF values for a certain element with given X-ray souce."""
@@ -155,6 +192,19 @@ class SpectrumFigure(BeautifulFigure):
                                  xy=[peak["BE"], rsf + self.now_xy[3] * 0.015],
                                  color="blue",
                                  textcoords="data")
+#
+#
+# class SpectrumSpanSelector(SpanSelector):
+#     """Lets the user select a region in a spectrum."""
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs, onselect=self.onselect,
+#                          onmove=self.onmove)
+#
+#     def onselect(self, xmin, xmax):
+#         """a"""
+#         print(xmin, xmax)
+#
+#     def onmove(self, xmin, xmax):
 
 
 class MPLNavBar(NavigationToolbar):
