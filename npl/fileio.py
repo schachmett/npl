@@ -101,6 +101,15 @@ class DBHandler():
         spectrum_container = self.get_container()
         return spectrum_container
 
+    def change_dbfile(self, new_filename):
+        """Change db file name."""
+        self.dbfilename = new_filename
+
+    def remove_dbfile(self):
+        """Trashes db file."""
+        os.remove(self.dbfilename)
+        self.dbfilename = None
+
     def create_tables(self):
         """Creates tables if not already created."""
         create_sql = ["""CREATE TABLE Spectrum
@@ -113,16 +122,10 @@ class DBHandler():
                           DwellTime real,
                           PassEnergy real,
                           Visibility text,
-                          PRIMARY KEY (SpectrumID))""",
-                      """CREATE TABLE SpectrumData
-                         (SpectrumDataID integer,
                           Energy blob,
                           Intensity blob,
-                          Type text,
-                          SpectrumID integer,
-                          PRIMARY KEY (SpectrumDataID),
-                          FOREIGN KEY (SpectrumID) REFERENCES
-                                       Spectrum(SpectrumID))"""]
+                          Regions blob,
+                          PRIMARY KEY (SpectrumID))"""]
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             for sql in create_sql:
@@ -137,8 +140,7 @@ class DBHandler():
     def wipe_tables(self):
         """Drops tables and creates new ones."""
         with sqlite3.connect(self.dbfilename) as database:
-            sqls = ["DROP TABLE IF EXISTS Spectrum",
-                    "DROP TABLE IF EXISTS SpectrumData"]
+            sqls = ["DROP TABLE IF EXISTS Spectrum"]
             cursor = database.cursor()
             for sql in sqls:
                 cursor.execute(sql, ())
@@ -150,27 +152,25 @@ class DBHandler():
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
             sql = """SELECT SpectrumID, Name, Notes, EISRegion, Filename,
-                     Sweeps, DwellTime, PassEnergy, Visibility
+                     Sweeps, DwellTime, PassEnergy, Visibility, Energy,
+                     Intensity, Regions
                      FROM Spectrum"""
             cursor.execute(sql, ())
             spectrum_container = SpectrumContainer()
             spectra = cursor.fetchall()
             for spectrum in spectra:
-                sid = spectrum[0]
-                sql = """SELECT Energy, Intensity, Type
-                         FROM SpectrumData
-                         WHERE SpectrumID=?"""
-                cursor.execute(sql, (sid, ))
-                spectrum_data = cursor.fetchall()[0]
-                specdict = {"sid": sid, "name": spectrum[1],
-                            "notes": spectrum[2], "eis_region": spectrum[3],
-                            "fname": spectrum[4], "sweeps": spectrum[5],
+                specdict = {"sid": spectrum[0],
+                            "name": spectrum[1],
+                            "notes": spectrum[2],
+                            "eis_region": spectrum[3],
+                            "fname": spectrum[4],
+                            "sweeps": spectrum[5],
                             "dwelltime": spectrum[6],
                             "passenergy": spectrum[7],
-                            "visibility": spectrum[8]}
-                if spectrum_data[2] == "default":
-                    specdict["energy"] = pickle.loads(spectrum_data[0])
-                    specdict["intensity"] = pickle.loads(spectrum_data[1])
+                            "visibility": "",   #TODO: delete tag
+                            "energy": pickle.loads(spectrum[9]),
+                            "intensity": pickle.loads(spectrum[10]),
+                            "regions": pickle.loads(spectrum[11])}
                 spectrum_container.append(Spectrum(**specdict))
         return spectrum_container
 
@@ -185,15 +185,6 @@ class DBHandler():
             database.commit()
         return idlist
 
-    def change_dbfile(self, new_filename):
-        """Change db file name."""
-        self.dbfilename = new_filename
-
-    def remove_dbfile(self):
-        """Trashes db file."""
-        os.remove(self.dbfilename)
-        self.dbfilename = None
-
     def add_spectrum(self, spectrum, cursor=None):
         """Adds a spectrum to the project file."""
         needs_closing = False
@@ -203,8 +194,8 @@ class DBHandler():
             cursor = database.cursor()
         sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
                                       Sweeps, DwellTime, PassEnergy,
-                                      Visibility)
-                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)"""
+                                      Visibility, Energy, Intensity, Regions)
+                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
         values = (spectrum.name,
                   spectrum.notes,
                   spectrum.eis_region,
@@ -212,15 +203,12 @@ class DBHandler():
                   spectrum.sweeps,
                   spectrum.dwelltime,
                   spectrum.passenergy,
-                  spectrum.visibility)
+                  spectrum.visibility,
+                  pickle.dumps(spectrum.energy),
+                  pickle.dumps(spectrum.intensity),
+                  pickle.dumps(spectrum.regions))
         cursor.execute(sql, values)
         spectrum_id = cursor.lastrowid
-        sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
-                                          SpectrumID)
-                VALUES(?, ?, ?, ?)"""
-        energy = pickle.dumps(spectrum.energy)
-        intensity = pickle.dumps(spectrum.intensity)
-        cursor.execute(sql, (energy, intensity, "default", spectrum_id))
         if needs_closing:
             database.commit()
             database.close()
@@ -236,29 +224,7 @@ class DBHandler():
             cursor.execute(sql, (spectrum_id, ))
             database.commit()
 
-    # def amend_spectrum(self, spectrum_id, newspectrum):
-    #     """Amends spectrum in the project file."""
-    #     self.remove_spectrum_by_sql_id(spectrum_id)
-    #     with sqlite3.connect(self.dbfilename) as database:
-    #         cursor = database.cursor()
-    #         sql = """INSERT INTO Spectrum(Name, Notes, EISRegion, Filename,
-    #                                       Sweeps, DwellTime, PassEnergy,
-    #                                       Visibility, SpectrumID)
-    #                  VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-    #         values = (*[newspectrum[key] for key in self.spectrum_keys],
-    #                   spectrum_id)
-    #         cursor.execute(sql, values)
-    #         spectrum_id = cursor.lastrowid
-    #
-    #         sql = """INSERT INTO SpectrumData(Energy, Intensity, Type,
-    #                                           SpectrumID)
-    #                  VALUES(?, ?, ?, ?)"""
-    #         energy = pickle.dumps(newspectrum["Energy"])
-    #         intensity = pickle.dumps(newspectrum["Intensity"])
-    #         cursor.execute(sql, (energy, intensity, "default", spectrum_id))
-    #         database.commit()
-
-    def sid(self, spectrum):
+    def get_sql_id(self, spectrum):
         """Searches for a spectrum and gives the sql ID."""
         with sqlite3.connect(self.dbfilename) as database:
             cursor = database.cursor()
