@@ -42,11 +42,13 @@ class CanvasBox(Gtk.Box):
         """Draws on canvas."""
         self.figure.ax.cla()
         self.figure.plot_spectra(self.app.s_container)
+        if keepaxes:
+            self.figure.adjust_axlims()
+        else:
+            self.figure.recenter_view()
+        self.figure.set_ticks()
         self.figure.plot_rsf(self.rsf["elements"], self.rsf["source"])
         self.figure.canvas.draw_idle()
-        if not keepaxes:
-            pass
-        self.figure.recenter_view()
 
     def on_show_rsf(self, *_ignore):
         """ makes a SelectElementsDialog and hands the user input to the
@@ -63,10 +65,10 @@ class CanvasBox(Gtk.Box):
             self.refresh()
         dialog.destroy()
 
-    def on_select_energyrange(self, spectra):
+    def create_region(self, spectra, callback):
         """Calls the plotter energy range selector method."""
         if len(spectra) == 1:
-            self.figure.get_span(spectra[0])
+            self.figure.get_span(spectra[0], callback)
         else:
             self.parent.message("More than one spectrum selected")
 
@@ -77,26 +79,31 @@ class BeautifulFigure(Figure):
         # pylint: disable=invalid-name
         super().__init__(figsize=(10, 10), dpi=80)
         self.canvas = FigureCanvas(self)
-        self.ax = self.add_axes([-0.01, -0.01, 1.02, 1.02])
+        self.ax = self.add_axes([-0.005, 0.0, 1.01, 1.005])
 
         self.now_xy = [0, 0, 1, 1]
         self.s_xy = [np.inf, -np.inf, np.inf, -np.inf]
 
     def set_ticks(self):
         """Configures axes ticks."""
-        self.axes.tick_params(reset=True,
-                              axis="both",
-                              direction="in",
-                              pad=-20,
-                              labelsize="large",
-                              labelleft=False)
+        self.ax.tick_params(reset=True,
+                            axis="both",
+                            direction="in",
+                            pad=-20,
+                            labelsize="large",
+                            labelcolor="blue",
+                            color="blue",
+                            labelleft=False,
+                            top=False,
+                            left=False,
+                            right=False)
         if self.s_xy[0] == np.inf:
-            self.axes.tick_params(which="both",
-                                  bottom=False,
-                                  top=False,
-                                  left=False,
-                                  right=False,
-                                  labelbottom=False)
+            self.ax.tick_params(which="both",
+                                bottom=False,
+                                top=False,
+                                left=False,
+                                right=False,
+                                labelbottom=False)
 
     def adjust_axlims(self):
         """Sets the axis limits."""
@@ -110,11 +117,6 @@ class BeautifulFigure(Figure):
             self.now_xy = self.s_xy
         self.adjust_axlims()
 
-    def plotspan(self, xmin, xmax):
-        """Draws a span."""
-        self.ax.vlines([xmin, xmax], self.now_xy[2], self.now_xy[3],
-                       colors="b", lw=1)
-
 
 class SpectrumFigure(BeautifulFigure):
     """Axes object containing the methods for plotting Spectra."""
@@ -123,16 +125,6 @@ class SpectrumFigure(BeautifulFigure):
         rsf_file = os.path.join(__config__.get("general", "basedir"), "rsf.db")
         self.rsfhandler = RSFHandler(rsf_file)
         self.span_selector = None
-        # self.span_selector = SpanSelector(self.ax,
-        #                                   self.on_region_selected,
-        #                                   "horizontal",
-        #                                   span_stays=True,
-        #                                   useblit=True,
-        #                                   rectprops=dict(alpha=1,
-        #                                                  fill=False,
-        #                                                  edgecolor="blue",
-        #                                                  linewidth=2))
-        # self.span_selector.active = False
 
     def plot_spectra(self, container):
         """Plots a spectrum."""
@@ -146,18 +138,26 @@ class SpectrumFigure(BeautifulFigure):
                              max(self.s_xy[1], max(spectrum.energy)),
                              min(self.s_xy[2], min(spectrum.intensity)),
                              max(self.s_xy[3], max(spectrum.intensity * 1.05))]
-            if "r" in spectrum.visibility:
-                for region in spectrum.regions:
-                    self.ax.axvline(region.emin, 0, 1, c="blue", lw=2)
-                    self.ax.axvline(region.emax, 0, 1, c="blue", lw=2)
+                if "r" in spectrum.visibility:
+                    for region in spectrum.regions:
+                        self.ax.axvline(region.emin, 0, 1, c="blue", lw=2)
+                        self.ax.axvline(region.emax, 0, 1, c="blue", lw=2)
+                        region.calculate_background()
+                        if ("b" in spectrum.visibility
+                            and region.background is not None):
+                            self.ax.plot(region.energy,
+                                         region.background,
+                                         c="r", ls="--")
 
-    def get_span(self, spectrum):
+    def get_span(self, spectrum, callback=None):
         """Makes a SpanSelector and uses it."""
         def on_region_selected(emin, emax):
             """Creates a new region in Spectrum object."""
             region = Region(spectrum=spectrum, emin=emin, emax=emax)
             spectrum.regions.append(region)
             self.span_selector.active = False
+            if callback:
+                callback()
         self.span_selector = SpanSelector(self.ax,
                                           on_region_selected,
                                           "horizontal",
@@ -192,19 +192,6 @@ class SpectrumFigure(BeautifulFigure):
                                  xy=[peak["BE"], rsf + self.now_xy[3] * 0.015],
                                  color="blue",
                                  textcoords="data")
-#
-#
-# class SpectrumSpanSelector(SpanSelector):
-#     """Lets the user select a region in a spectrum."""
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs, onselect=self.onselect,
-#                          onmove=self.onmove)
-#
-#     def onselect(self, xmin, xmax):
-#         """a"""
-#         print(xmin, xmax)
-#
-#     def onmove(self, xmin, xmax):
 
 
 class MPLNavBar(NavigationToolbar):

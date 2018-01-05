@@ -13,11 +13,13 @@ from npl.fileio import FileParser, DBHandler
 from npl.containers import SpectrumContainer
 from npl.gui_treeview import (ContainerView, TreeViewFilterBar,
                               ContainerContextMenu)
+from npl.gui_regions import RegionManager
 from npl.gui_plotter import CanvasBox, MPLNavBar
 
 
 class Npl(Gtk.Application):
     # pylint: disable=arguments-differ
+    # TODO: cview does not load attributes correctly when importing
     """Application class, this has all the action(s)."""
     def __init__(self):
         app_id = "org.{}.app".format(__appname__.lower())
@@ -109,8 +111,7 @@ class Npl(Gtk.Application):
     def do_save(self, *_ignore):
         """Saves project, calls do_save_as if it does not already have a
         file. Returns True if successful."""
-        if (self.project_fname is None
-                or not os.path.isfile(self.project_fname)):
+        if self.project_fname is None:
             self.do_save_as()
         else:
             self.dbhandler.save(self.s_container, self.project_fname)
@@ -209,7 +210,7 @@ class Npl(Gtk.Application):
         dialog = EditSpectrumDialog(self.win, spectra)
         response = dialog.run()
         if response == Gtk.ResponseType.OK:
-            self.s_container.altered = dialog.change_values()
+            dialog.change_values()
         dialog.destroy()
 
     def do_quit(self, *_ignore):
@@ -254,17 +255,20 @@ class MainWindow(Gtk.ApplicationWindow):
         self.canvasbox = CanvasBox(self.app, self)
         self.mpl_navbar = MPLNavBar(self.canvasbox.figure, self)
 
-
         context_actions = [("Show selected", self.do_show_selected),
                            ("Edit spectrum", self.app.do_edit_spectrum),
                            ("Show rsf", self.do_show_rsf),
-                           ("Get span", self.do_select_energyrange),
-                           ("debug", self.do_debug)]
-        self.cview = ContainerView(self.app.s_container, attrs=["notes"])
+                           ("Get span", self.do_create_region),
+                           ("debug", self.do_debug),
+                           ("delete regions", self.do_delete_regions)]
+        self.cview = ContainerView(self.app.s_container,
+                                   attrs=["name", "notes"])
         self.cview.menu = ContainerContextMenu(self.cview, context_actions)
         self.cview.menu.set_doubleclick_action(*context_actions[0])
         self.filterbar = TreeViewFilterBar(self.cview, "Notes",
                                            hide_combo=True)
+
+        self.rview = RegionManager(self)
 
         self.build_window()
 
@@ -274,22 +278,22 @@ class MainWindow(Gtk.ApplicationWindow):
         scrollable = Gtk.ScrolledWindow()
         scrollable.set_property("min-content-width", 300)
         scrollable.add(self.cview)
-        cviewbox.pack_start(scrollable, True, True, 0)
-        cviewbox.pack_start(self.filterbar, False, False, 0)
+        cviewbox.pack_start(self.filterbar, False, False, 2)
+        cviewbox.pack_start(scrollable, True, True, 2)
 
-        contentpanes = Gtk.HPaned()
-        contentpanes.shrink = False
-        contentpanes.pack1(cviewbox, False, False)
-        contentpanes.pack2(self.canvasbox, True, False)
+        vpanes = Gtk.VPaned()
+        vpanes.pack1(cviewbox, True, False)
+        vpanes.pack2(self.rview, False, False)
+
+        hpanes = Gtk.HPaned()
+        hpanes.shrink = False
+        hpanes.pack1(vpanes, False, False)
+        hpanes.pack2(self.canvasbox, True, False)
 
         masterbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         masterbox.pack_start(self.toolbar, False, False, 0)
-        masterbox.pack_start(contentpanes, True, True, 0)
+        masterbox.pack_start(hpanes, True, True, 0)
         self.add(masterbox)
-
-    def refresh_canvas(self, keepaxes=False):
-        """Figure refetches its info and redraws."""
-        self.canvasbox.refresh(keepaxes)
 
     def do_about(self, *_args, **kwargs):
         """Show "About" dialog."""
@@ -320,25 +324,53 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def do_debug(self, *_ignore):
         """Allows for testing stuff from GUI."""
-        pass
+        page3 = Gtk.Box()
+        page3.add(Gtk.Label("rrr"))
+        page3.add(Gtk.Label("eee"))
+        self.rview.append_page(page3, Gtk.Label("page3"))
 
     def do_show_rsf(self, *_ignore):
         """ calls the canvasbox method to show rsf values in plot """
         self.canvasbox.on_show_rsf()
 
-    def do_select_energyrange(self, *_ignore):
+    def do_create_region(self, *_ignore):
         """ calls canvasbox method to select an energy range """
-        self.canvasbox.on_select_energyrange(self.get_selected_spectra())
+        self.canvasbox.create_region(self.get_selected_spectra(),
+                                     self.refresh_all)
+
+    def do_delete_regions(self, *_ignore):
+        """Deletes regions of selected spectra."""
+        spectra = self.get_selected_spectra()
+        for spectrum in spectra:
+            spectrum.regions = []
+        self.refresh_all()
 
     def do_show_selected(self, *_ignore):
         """Plots spectra that are selected in the SpectrumView."""
         spectra = self.get_selected_spectra()
         self.app.s_container.show_only(spectra)
-        self.refresh_canvas(keepaxes=False)
+        self.refresh_all()
 
     def get_selected_spectra(self, *_ignore):
         """Returns the spectra currently selected in the SpectrumView."""
         return self.cview.get_selected_spectra()
+
+    def refresh_rview(self, *_ignore):
+        """Refreshes the RegionManager."""
+        spectra = self.get_selected_spectra()
+        if len(spectra) == 1:
+            self.rview.set_spectrum(spectra[0])
+        else:
+            self.rview.set_spectrum(None)
+
+    def refresh_canvas(self, keepaxes=False):
+        """Figure refetches its info and redraws."""
+        self.canvasbox.refresh(keepaxes)
+
+    def refresh_all(self):
+        """Refreshes rview and canvas."""
+        self.refresh_rview()
+        self.refresh_canvas()
 
 
 class ToolBar(Gtk.Toolbar):
@@ -364,7 +396,7 @@ class ToolBar(Gtk.Toolbar):
              self.parent.do_show_rsf),
             (os.path.join(__config__.get("general", "basedir"),
                           "icons/xrangesel.png"),
-             self.parent.do_select_energyrange))
+             self.parent.do_create_region))
         for icon_name, callback in self.toolitems:
             if icon_name is None:
                 self.insert(Gtk.SeparatorToolItem(), -1)
@@ -450,14 +482,11 @@ class EditSpectrumDialog(Gtk.Dialog):
 
     def change_values(self):
         """Actually changes the values of the spectra."""
-        altered = False
         for spectrum in self.spectra:
             for i, (attr, _title) in enumerate(self.titles):
                 new_value = self.entries[i].get_text()
                 if self.excluding_key not in new_value:
                     setattr(spectrum, attr, new_value)
-                    altered = True
-        return altered
 
 
 class AskForSaveDialog(Gtk.Dialog):

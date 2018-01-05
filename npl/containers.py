@@ -6,9 +6,11 @@ import uuid
 
 import numpy as np
 
+import npl.processing
+
 
 class Spectrum(object):
-    """Stores spectrum data.""" #TODO: incorporate regions into db
+    """Stores spectrum data."""
     # pylint: disable=access-member-before-definition, no-member
     # pylint: disable=attribute-defined-outside-init
     _titles = {"name": "Name",
@@ -27,9 +29,9 @@ class Spectrum(object):
                  "sweeps": 0,
                  "dwelltime": 0,
                  "passenergy": 0,
-                 "energy": [],
-                 "intensity": [],
-                 "regions": []}
+                 "energy": None,
+                 "intensity": None,
+                 "regions": None}
     attrs = sorted(list(_defaults.keys()))
 
     def __init__(self, **kwargs):
@@ -38,6 +40,8 @@ class Spectrum(object):
             if attr not in kwargs:
                 raise ValueError("Missing property {}".format(attr))
         for (attr, default) in self._defaults.items():
+            if default is None:
+                default = []
             if attr in kwargs and kwargs[attr] is not None:
                 setattr(self, attr, kwargs.get(attr, default))
             else:
@@ -61,19 +65,20 @@ class Spectrum(object):
 
     def plot(self):
         """Switch plotting flag on."""
-        self.visibility += "dr"
+        self.visibility += "bdr"
 
     def unplot(self):
         """Switch plotting flag off."""
         self.visibility = self.visibility.replace("d", "")
         self.visibility = self.visibility.replace("r", "")
+        self.visibility = self.visibility.replace("b", "")
 
     @staticmethod
     def title(attr):
         """Returns the user friendly string for an attribute."""
         if attr in Spectrum._titles:
             return Spectrum._titles[attr]
-        return None
+        return attr
 
     def __eq__(self, other):
         """ for testing equality """
@@ -92,8 +97,14 @@ class Spectrum(object):
 
 class Region(object):
     """A region is a part of a spectrum."""
+    # pylint: disable=access-member-before-definition, no-member
+    # pylint: disable=attribute-defined-outside-init
+    bgtypes = ("none", "linear", "shirley")
     _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
                  "name": "",
+                 "bgtype": "shirley",
+                 "_energy": (None, None),
+                 "_background": (None, None),
                  "emin": None,
                  "emax": None,
                  "spectrum": None}
@@ -108,13 +119,50 @@ class Region(object):
             else:
                 setattr(self, attr, default)
 
-    def subtract_background(self):
-        """Returns background subtracted intensity."""
-        pass
+        if not self.name:
+            self.name = "Region {}".format(len(self.spectrum.regions) + 1)
 
-    def change_range(self, emin, emax):
-        """Changes range to emin, emax."""
-        pass
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name in ("emin", "emax"):
+            self._background = "changed"
+            self._energy = "changed"
+
+    @property
+    def background(self):
+        """Calculates correct background on the fly."""
+        if self.bgtype == "none":
+            return None
+        if not self._background[0] == self.bgtype:
+            self._background = (self.bgtype, self.calculate_background())
+        return self._background[-1]
+
+    @property
+    def energy(self):
+        """Cuts out the energy from the overlaying spectrum."""
+        if self._energy[0] != "unchanged":
+            idx1, idx2 = sorted([np.searchsorted(self.spectrum.energy,
+                                                 self.emin),
+                                 np.searchsorted(self.spectrum.energy,
+                                                 self.emax)])
+            self._energy = ("unchanged", self.spectrum.energy[idx1:idx2])
+        return self._energy[1]
+
+    def calculate_background(self):
+        """Returns background subtracted intensity."""
+        # pylint: disable=too-many-locals
+        idx1, idx2 = sorted([np.searchsorted(self.spectrum.energy, self.emin),
+                             np.searchsorted(self.spectrum.energy, self.emax)])
+        energy = self.spectrum.energy[idx1:idx2]
+        intensity = self.spectrum.intensity[idx1:idx2]
+
+        if self.bgtype == "linear":
+            background = np.linspace(intensity[0], intensity[-1], len(energy))
+        elif self.bgtype == "shirley":
+            background = npl.processing.shirley(energy, intensity)
+        else:
+            background = None
+        return background
 
 
 class Peak(object):
@@ -160,9 +208,9 @@ class SpectrumContainer(list):
         for spectrum in self:
             if spectrum.sid == sid:
                 return spectrum
-            for region in spectrum.regions:
-                if region.sid == sid:
-                    return region
+            # for region in spectrum.regions:
+            #     if region.sid == sid:
+            #         return region
         return None
 
     def get_idx_by_sid(self, sid):
@@ -170,9 +218,9 @@ class SpectrumContainer(list):
         for idx, spectrum in enumerate(self):
             if spectrum.sid == sid:
                 return (idx, None)
-            for idx2, region in enumerate(spectrum.regions):
-                if region.sid == sid:
-                    return (idx, idx2)
+            # for idx2, region in enumerate(spectrum.regions):
+            #     if region.sid == sid:
+            #         return (idx, idx2)
         return None
 
     def show_only(self, spectra_to_show):
@@ -223,3 +271,4 @@ class SpectrumContainer(list):
                 attr = kwargs["attr"]
                 value = kwargs["value"]
                 callback("amend", spectrum=spectrum, attr=attr, value=value)
+            self.altered = True
