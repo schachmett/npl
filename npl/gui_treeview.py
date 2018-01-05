@@ -3,10 +3,13 @@ filtering/sorting/selecting them."""
 # pylint: disable=wrong-import-position
 
 import re
+import os
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, GObject, Gdk
+from gi.repository import Gtk, GObject, Gdk, GdkPixbuf
+
+from npl import __config__
 
 
 class ContainerView(Gtk.TreeView):
@@ -27,7 +30,7 @@ class ContainerView(Gtk.TreeView):
         self.set_model(self.sortable_model)
         self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
         self.set_rules_hint(True)
-        self.set_headers_visible(False)
+        # self.set_headers_visible(False)     # hide column names
 
         self.filter = (None, None)
         self.filter_model.set_visible_func(self.filter_func)
@@ -291,7 +294,8 @@ class ContainerModelIface(ContainerModel):
 class TreeViewFilterBar(Gtk.Box):
     """A filter bar featuring an entry and a combobox determining which field
     to search."""
-    def __init__(self, sview, default_colname=None, hide_combo=False):
+    def __init__(self, sview, default_colname=None, hide_combo=False,
+                 hide_icon=False):
         super().__init__(Gtk.Orientation.HORIZONTAL, spacing=2)
         self.set_size_request(-1, 30)
         self.sview = sview
@@ -308,8 +312,15 @@ class TreeViewFilterBar(Gtk.Box):
         self.entry.connect("changed", self.on_entry_changed)
 
         if not hide_combo:
-            self.pack_start(self.combo, False, False, 0)
-        self.pack_start(self.entry, True, True, 0)
+            self.pack_start(self.combo, False, False, 2)
+        if not hide_icon:
+            icon_path = os.path.join(__config__.get("general", "basedir"),
+                                     "icons/search.svg")
+            iconbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_path,
+                                                              25, -1, True)
+            icon = Gtk.Image.new_from_pixbuf(iconbuf)
+            self.pack_start(icon, False, False, 2)
+        self.pack_start(self.entry, True, True, 2)
 
     def on_entry_changed(self, entry):
         """Applies a new filter when the entry is changed."""
