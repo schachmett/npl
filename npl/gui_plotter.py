@@ -36,6 +36,7 @@ class CanvasBox(Gtk.Box):
         self.pack_start(self.figure.canvas, True, True, 0)
         self.pack_start(self.navbar, False, False, 0)
 
+        self.refresh_all = self.parent.refresh_all
         self.refresh()
 
     def refresh(self, keepaxes=False):
@@ -65,10 +66,10 @@ class CanvasBox(Gtk.Box):
             self.refresh()
         dialog.destroy()
 
-    def create_region(self, spectra, callback):
+    def create_region(self, spectra):
         """Calls the plotter energy range selector method."""
         if len(spectra) == 1:
-            self.figure.get_span(spectra[0], callback)
+            self.figure.get_span(spectra[0], self.refresh_all)
         else:
             self.parent.message("More than one spectrum selected")
 
@@ -138,16 +139,18 @@ class SpectrumFigure(BeautifulFigure):
                              max(self.s_xy[1], max(spectrum.energy)),
                              min(self.s_xy[2], min(spectrum.intensity)),
                              max(self.s_xy[3], max(spectrum.intensity * 1.05))]
-                if "r" in spectrum.visibility:
-                    for region in spectrum.regions:
-                        self.ax.axvline(region.emin, 0, 1, c="blue", lw=2)
-                        self.ax.axvline(region.emax, 0, 1, c="blue", lw=2)
-                        region.calculate_background()
-                        if ("b" in spectrum.visibility
+            else:
+                continue
+            if "r" in spectrum.visibility:
+                for region in spectrum.regions:
+                    self.ax.axvline(region.emin, 0, 1, c="blue", lw=2)
+                    self.ax.axvline(region.emax, 0, 1, c="blue", lw=2)
+                    region.calculate_background()
+                    if ("b" in spectrum.visibility
                             and region.background is not None):
-                            self.ax.plot(region.energy,
-                                         region.background,
-                                         c="r", ls="--")
+                        self.ax.plot(region.energy,
+                                     region.background,
+                                     c="r", ls="--")
 
     def get_span(self, spectrum, callback=None):
         """Makes a SpanSelector and uses it."""
