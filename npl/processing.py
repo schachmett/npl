@@ -38,3 +38,22 @@ def shirley(energy, intensity, tol=1e-5, maxit=20):
     if is_reversed:
         return background[::-1]
     return background
+
+def moving_average(intensity, interval=20):
+    """Smoothed intensity."""
+    odd = int(interval / 2) * 2 + 1
+    even = int(interval / 2) * 2
+    cumsum = np.cumsum(np.insert(intensity, 0, 0))
+    avged = (cumsum[odd:] - cumsum[:-odd]) / odd
+    for _ in range(int(even / 2)):
+        avged = np.insert(avged, 0, avged[0])
+        avged = np.insert(avged, -1, avged[-1])
+    return avged
+
+def calibrate(energy, calibration):
+    """Calibrate energy axis."""
+    return energy + calibration
+
+def normalize(intensity, norm):
+    """Normalize intensity."""
+    return intensity + norm

@@ -6,32 +6,37 @@ import uuid
 
 import numpy as np
 
-import npl.processing
+import npl.processing as proc
 
 
 class Spectrum(object):
     """Stores spectrum data."""
     # pylint: disable=access-member-before-definition, no-member
     # pylint: disable=attribute-defined-outside-init
-    _titles = {"name": "Name",
-               "notes": "Notes",
-               "eis_region": "Region",
-               "fname": "File name",
-               "sweeps": "Sweeps",
-               "dwelltime": "Dwell [s]",
-               "passenergy": "Pass [eV]"}
-    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
-                 "visibility": "",
-                 "name": "",
-                 "notes": "",
-                 "eis_region": "",
-                 "fname": "",
-                 "sweeps": 0,
-                 "dwelltime": 0,
-                 "passenergy": 0,
-                 "energy": None,
-                 "intensity": None,
-                 "regions": None}
+    _titles = {
+        "name": "Name",
+        "notes": "Notes",
+        "eis_region": "Region",
+        "fname": "File name",
+        "sweeps": "Sweeps",
+        "dwelltime": "Dwell [s]",
+        "passenergy": "Pass [eV]"}
+    _defaults = {
+        "sid": int(uuid.uuid4()) & (1<<64)-1,
+        "visibility": "",
+        "name": "",
+        "notes": "",
+        "eis_region": "",
+        "fname": "",
+        "sweeps": 0,
+        "dwelltime": 0,
+        "passenergy": 0,
+        "regions": None,
+        "smoothness": 0,
+        "calibration": 0,
+        "norm": 0,
+        "_processed_energy": (None, None),
+        "_processed_intensity": (None, None)}
     attrs = sorted(list(_defaults.keys()))
 
     def __init__(self, **kwargs):
@@ -39,21 +44,27 @@ class Spectrum(object):
         for attr in ("energy", "intensity"):
             if attr not in kwargs:
                 raise ValueError("Missing property {}".format(attr))
+        self._energy = kwargs["energy"]
+        self._intensity = kwargs["intensity"]
+
         for (attr, default) in self._defaults.items():
             if default is None:
                 default = []
             if attr in kwargs and kwargs[attr] is not None:
-                setattr(self, attr, kwargs.get(attr, default))
+                setattr(self, attr, kwargs[attr])
             else:
                 setattr(self, attr, default)
+
         if not self.name and self.eis_region:
             self.name = "(R {})".format(self.eis_region)
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
-        if name != "visibility":
+        if name in self._titles:
             for callback in self._observers:
                 callback("set", spectrum=self, attr=name, value=value)
+        if name in ("smoothness", "calibration", "norm"):
+            self.reprocess()
 
     def subscribe(self, callback):
         """Bind a new callback to this."""
@@ -64,7 +75,10 @@ class Spectrum(object):
         self._observers.remove(callback)
 
     def plot(self):
-        """Switch plotting flag on."""
+        """Switch plotting flag on.
+        b: plot background
+        d: plot spectrum (-> default)
+        r: plot region markers"""
         self.visibility += "bdr"
 
     def unplot(self):
@@ -72,6 +86,38 @@ class Spectrum(object):
         self.visibility = self.visibility.replace("d", "")
         self.visibility = self.visibility.replace("r", "")
         self.visibility = self.visibility.replace("b", "")
+
+    @property
+    def intensity(self):
+        """Spectrum intensity, including possible processing."""
+        if self.smoothness == 0 and self.norm == 0:
+            return self._intensity
+        if self._processed_intensity[0] is None:
+            intensity = self._intensity
+            intensity = proc.normalize(intensity, self.norm)
+            intensity = proc.moving_average(intensity, self.smoothness)
+            self._processed_intensity = ("unchanged", intensity)
+        return self._processed_intensity[1]
+
+    @property
+    def energy(self):
+        """Spectrum energy, including calibration."""
+        if self.calibration == 0:
+            return self._energy
+        if self._processed_energy[0] is None:
+            energy = self._energy
+            energy = proc.calibrate(energy, self.calibration)
+            self._processed_energy = ("unchanged", energy)
+        return self._processed_energy[1]
+
+    def reprocess(self):
+        """Next time self.energy and self.intensity are called, all processing
+        is done anew."""
+        self._processed_energy = (None, None)
+        self._processed_intensity = (None, None)
+        if hasattr(self, "regions"):
+            for region in self.regions:
+                region.reprocess()
 
     @staticmethod
     def title(attr):
@@ -82,17 +128,23 @@ class Spectrum(object):
 
     def __eq__(self, other):
         """ for testing equality """
-        for attr in self.__dict__:
-            try:
-                if (isinstance(getattr(self, attr), np.ndarray)
-                        or isinstance(getattr(other, attr), np.ndarray)):
-                    if (getattr(self, attr) != getattr(other, attr)).all():
-                        return False
-                elif getattr(self, attr) != getattr(other, attr):
-                    return False
-            except AttributeError:
-                return False
-        return True
+        if self.sid == other.sid:
+            return True
+        return False
+        # for attr in self.__dict__:
+        #     if attr[0] == "_" or attr == "intensity" or attr == "energy":
+        #         if attr != "_intensity" and attr != "_energy":
+        #             continue
+        #     try:
+        #         if (isinstance(getattr(self, attr), np.ndarray)
+        #                 or isinstance(getattr(other, attr), np.ndarray)):
+        #             if (getattr(self, attr) != getattr(other, attr)).all():
+        #                 return False
+        #         elif getattr(self, attr) != getattr(other, attr):
+        #             return False
+        #     except AttributeError:
+        #         return False
+        # return True
 
 
 class Region(object):
@@ -108,6 +160,7 @@ class Region(object):
                  "emin": None,
                  "emax": None,
                  "spectrum": None}
+
     def __init__(self, **kwargs):
         self._observers = []
         for attr in ("spectrum", "emin", "emax"):
@@ -141,12 +194,16 @@ class Region(object):
     def energy(self):
         """Cuts out the energy from the overlaying spectrum."""
         if self._energy[0] != "unchanged":
-            idx1, idx2 = sorted([np.searchsorted(self.spectrum.energy,
-                                                 self.emin),
-                                 np.searchsorted(self.spectrum.energy,
-                                                 self.emax)])
+            idx1, idx2 = sorted([
+                np.searchsorted(self.spectrum.energy, self.emin),
+                np.searchsorted(self.spectrum.energy, self.emax)])
             self._energy = ("unchanged", self.spectrum.energy[idx1:idx2])
         return self._energy[1]
+
+    def reprocess(self):
+        """Recalculate background etc at next occasion."""
+        self._background = (None, None)
+        self._energy = (None, None)
 
     def calculate_background(self):
         """Returns background subtracted intensity."""
@@ -159,7 +216,7 @@ class Region(object):
         if self.bgtype == "linear":
             background = np.linspace(intensity[0], intensity[-1], len(energy))
         elif self.bgtype == "shirley":
-            background = npl.processing.shirley(energy, intensity)
+            background = proc.shirley(energy, intensity)
         else:
             background = None
         return background
@@ -208,9 +265,6 @@ class SpectrumContainer(list):
         for spectrum in self:
             if spectrum.sid == sid:
                 return spectrum
-            # for region in spectrum.regions:
-            #     if region.sid == sid:
-            #         return region
         return None
 
     def get_idx_by_sid(self, sid):
@@ -218,9 +272,6 @@ class SpectrumContainer(list):
         for idx, spectrum in enumerate(self):
             if spectrum.sid == sid:
                 return (idx, None)
-            # for idx2, region in enumerate(spectrum.regions):
-            #     if region.sid == sid:
-            #         return (idx, idx2)
         return None
 
     def show_only(self, spectra_to_show):

@@ -57,6 +57,13 @@ class ContainerView(Gtk.TreeView):
             spectra.append(self.model.get_spectrum(path))
         return spectra
 
+    def set_selected_spectra(self, spectra):
+        """Sets selection to given spectra."""
+        self.get_selection().unselect_all()
+        for spectrum in spectra:
+            path = self.model.container.index(spectrum)
+            self.get_selection().select_path(path)
+
     def filter_by(self, attr, search_term):
         """Filters the treeview: only show rows where
         spectrum[key] matches regex."""
@@ -291,6 +298,80 @@ class ContainerModelIface(ContainerModel):
             self.remove(iter_)
 
 
+class SpectrumSettings(Gtk.Box):
+    """A box with settings for single spectra."""
+    # pylint: disable=attribute-defined-outside-init
+    def __init__(self, parent, spectra=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.spectra = spectra
+        self.refresh_canvas = parent.refresh_canvas
+        self.build()
+
+    def build(self):
+        """Builds elements."""
+        self.add_smoothing_setting()
+        self.add_norm_button()
+        self.connect_all_signals(self.apply)
+        self.connect_all_signals(self.refresh_canvas)
+        self.show_all()
+
+    def clear(self):
+        """Clears box."""
+        for child in self.get_children():
+            self.remove(child)
+
+    def add_smoothing_setting(self):
+        """Adds a box for setting smoothness of the spectrum."""
+        adj = Gtk.Adjustment(0, 0, 40, 2, 2, 0)
+        self.smoothscale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+        self.smoothscale.set_digits(0)
+        self.smoothscale.set_hexpand(True)
+        if not self.spectra:
+            self.smoothscale.set_range(0, 0)
+        else:
+            self.smoothscale.set_range(0, 40)
+            self.smoothscale.set_value(self.spectra[0].smoothness)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(
+            Gtk.Label(" Smoothing", width_chars=15, xalign=0), False, True, 2)
+        box.pack_start(self.smoothscale, True, True, 2)
+        self.pack_start(box, False, False, 2)
+
+    def add_norm_button(self):
+        """Adds a box for norming the spectrum."""
+        icon_path = os.path.join(
+            __config__.get("general", "basedir"), "icons/divide16.png")
+        norm_img = Gtk.Image.new_from_file(icon_path)
+        self.normbutton = Gtk.Button(label=" Normalize", image=norm_img)
+        self.normbutton.set_always_show_image(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(self.normbutton, False, False, 2)
+        self.pack_start(box, False, False, 2)
+
+
+    def connect_all_signals(self, func):
+        """Connects all active elements with given function."""
+        # self.smoothentry.connect("activate", func)
+        self.normbutton.connect("clicked", func)
+        self.smoothscale.connect("value-changed", func)
+
+    def apply(self, *_ignore):
+        """Applies changes to spectra."""
+        if self.spectra:
+            for spectrum in self.spectra:
+                # spectrum.smoothness = int(self.smoothentry.get_text())
+                spectrum.smoothness = int(self.smoothscale.get_value())
+
+    def set_spectra(self, spectra):
+        """Sets the spectra to work with."""
+        self.spectra = spectra
+        self.clear()
+        self.build()
+
+
 class TreeViewFilterBar(Gtk.Box):
     """A filter bar featuring an entry and a combobox determining which field
     to search."""
@@ -314,10 +395,10 @@ class TreeViewFilterBar(Gtk.Box):
         if not hide_combo:
             self.pack_start(self.combo, False, False, 2)
         if not hide_icon:
-            icon_path = os.path.join(__config__.get("general", "basedir"),
-                                     "icons/search.svg")
-            iconbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_path,
-                                                              25, -1, True)
+            icon_path = os.path.join(
+                __config__.get("general", "basedir"), "icons/search.svg")
+            iconbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                icon_path, 24, -1, True)
             icon = Gtk.Image.new_from_pixbuf(iconbuf)
             self.pack_start(icon, False, False, 2)
         self.pack_start(self.entry, True, True, 2)
