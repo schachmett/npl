@@ -50,10 +50,21 @@ def moving_average(intensity, interval=20):
         avged = np.insert(avged, -1, avged[-1])
     return avged
 
-def calibrate(energy, calibration):
+def get_energy_at_maximum(energy, intensity, span):
     """Calibrate energy axis."""
-    return energy + calibration
+    emin, emax = span
+    idx1, idx2 = sorted([np.searchsorted(energy, emin),
+                         np.searchsorted(energy, emax)])
+    maxidx = np.argmax(intensity[idx1:idx2]) + idx1
+    maxen = energy[maxidx]
+    return maxen
 
 def normalize(intensity, norm):
     """Normalize intensity."""
-    return intensity + norm
+    if not norm:
+        return intensity
+    if isinstance(norm, (int, float)) and norm != 1:
+        normto = norm
+    else:
+        normto = max(intensity)
+    return intensity / normto

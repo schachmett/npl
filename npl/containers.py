@@ -13,7 +13,8 @@ class Spectrum(object):
     """Stores spectrum data."""
     # pylint: disable=access-member-before-definition, no-member
     # pylint: disable=attribute-defined-outside-init
-    _titles = {
+    # pylint: disable=too-many-instance-attributes
+    titles = {
         "name": "Name",
         "notes": "Notes",
         "eis_region": "Region",
@@ -31,155 +32,149 @@ class Spectrum(object):
         "sweeps": 0,
         "dwelltime": 0,
         "passenergy": 0,
-        "regions": None,
         "smoothness": 0,
         "calibration": 0,
-        "norm": 0,
-        "_processed_energy": (None, None),
-        "_processed_intensity": (None, None)}
+        "norm": 0}
     attrs = sorted(list(_defaults.keys()))
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._observers = []
         for attr in ("energy", "intensity"):
             if attr not in kwargs:
                 raise ValueError("Missing property {}".format(attr))
+
         self._energy = kwargs["energy"]
         self._intensity = kwargs["intensity"]
+        self._processed_energy = (None, self._energy)
+        self._processed_intensity = (None, self._intensity)
+        self.regions = RegionList()
 
         for (attr, default) in self._defaults.items():
-            if default is None:
-                default = []
-            if attr in kwargs and kwargs[attr] is not None:
-                setattr(self, attr, kwargs[attr])
-            else:
-                setattr(self, attr, default)
+            setattr(self, attr, kwargs.get(attr, default))
 
         if not self.name and self.eis_region:
             self.name = "(R {})".format(self.eis_region)
 
     def __setattr__(self, name, value):
-        super().__setattr__(name, value)
-        if name in self._titles:
-            for callback in self._observers:
-                callback("set", spectrum=self, attr=name, value=value)
-        if name in ("smoothness", "calibration", "norm"):
+        if (hasattr(self, name)
+                and name in ("smoothness", "norm", "calibration")
+                and value != getattr(self, name)):
             self.reprocess()
-
-    def subscribe(self, callback):
-        """Bind a new callback to this."""
-        self._observers.append(callback)
-
-    def unsubscribe(self, callback):
-        """Unbind the callback."""
-        self._observers.remove(callback)
-
-    def plot(self):
-        """Switch plotting flag on.
-        b: plot background
-        d: plot spectrum (-> default)
-        r: plot region markers"""
-        self.visibility += "bdr"
-
-    def unplot(self):
-        """Switch plotting flag off."""
-        self.visibility = self.visibility.replace("d", "")
-        self.visibility = self.visibility.replace("r", "")
-        self.visibility = self.visibility.replace("b", "")
+        super().__setattr__(name, value)
+        self.emit("set", attr=name, value=value)
 
     @property
     def intensity(self):
         """Spectrum intensity, including possible processing."""
-        if self.smoothness == 0 and self.norm == 0:
-            return self._intensity
         if self._processed_intensity[0] is None:
             intensity = self._intensity
             intensity = proc.normalize(intensity, self.norm)
-            intensity = proc.moving_average(intensity, self.smoothness)
-            self._processed_intensity = ("unchanged", intensity)
+            intensity = proc.moving_average(
+                intensity, self.smoothness)
+            self._processed_intensity = (True, intensity)
         return self._processed_intensity[1]
 
     @property
     def energy(self):
         """Spectrum energy, including calibration."""
-        if self.calibration == 0:
-            return self._energy
         if self._processed_energy[0] is None:
-            energy = self._energy
-            energy = proc.calibrate(energy, self.calibration)
-            self._processed_energy = ("unchanged", energy)
+            self._processed_energy = (True, self._energy + self.calibration)
         return self._processed_energy[1]
 
     def reprocess(self):
         """Next time self.energy and self.intensity are called, all processing
         is done anew."""
-        self._processed_energy = (None, None)
-        self._processed_intensity = (None, None)
-        if hasattr(self, "regions"):
-            for region in self.regions:
-                region.reprocess()
+        self._processed_energy = (None, self._processed_energy[1])
+        self._processed_intensity = (None, self._processed_intensity[1])
+        self.emit("reprocess")
+
+    def recalculate(self):
+        """Calls self.energy and self.intensity after reprocessing."""
+        self.reprocess()
+        return self.energy, self.intensity
+
+    def get_energy_at_maximum(self, span):
+        """Returns the energy at the intensity maximum in a given energy
+        span=(emin, emax)."""
+        maxen = proc.get_energy_at_maximum(
+            self._processed_energy[1], self._processed_intensity[1], span)
+        return maxen
+
+    def __eq__(self, other):
+        """For testing equality."""
+        if self.sid == other.sid:
+            return True
+        return False
+
+    def plot(self):
+        """Switch plotting flag on. b: plot background, d: plot spectrum
+        (-> default), r: plot region markers"""
+        self.visibility += "bdr"
+
+    def unplot(self):
+        """Switch plotting flags off."""
+        self.visibility = ""
+
+    def subscribe(self, callback):
+        """Bind a new callback to this."""
+        self._observers.append(callback)
+        self.regions.subscribe(callback)
+
+    def unsubscribe(self, callback):
+        """Unbind the callback."""
+        self._observers.remove(callback)
+        self.regions.unsubscribe(callback)
+
+    def emit(self, keyword, **kwargs):
+        """Emits to all obervers."""
+        for callback in self._observers:
+            callback(keyword, self, **kwargs)
 
     @staticmethod
     def title(attr):
         """Returns the user friendly string for an attribute."""
-        if attr in Spectrum._titles:
-            return Spectrum._titles[attr]
+        if attr in Spectrum.titles:
+            return Spectrum.titles[attr]
         return attr
-
-    def __eq__(self, other):
-        """ for testing equality """
-        if self.sid == other.sid:
-            return True
-        return False
-        # for attr in self.__dict__:
-        #     if attr[0] == "_" or attr == "intensity" or attr == "energy":
-        #         if attr != "_intensity" and attr != "_energy":
-        #             continue
-        #     try:
-        #         if (isinstance(getattr(self, attr), np.ndarray)
-        #                 or isinstance(getattr(other, attr), np.ndarray)):
-        #             if (getattr(self, attr) != getattr(other, attr)).all():
-        #                 return False
-        #         elif getattr(self, attr) != getattr(other, attr):
-        #             return False
-        #     except AttributeError:
-        #         return False
-        # return True
 
 
 class Region(object):
     """A region is a part of a spectrum."""
     # pylint: disable=access-member-before-definition, no-member
     # pylint: disable=attribute-defined-outside-init
-    bgtypes = ("none", "linear", "shirley")
-    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
-                 "name": "",
-                 "bgtype": "shirley",
-                 "_energy": (None, None),
-                 "_background": (None, None),
-                 "emin": None,
-                 "emax": None,
-                 "spectrum": None}
+    bgtypes = ("none", "shirley", "linear")
+    _defaults = {
+        "sid": int(uuid.uuid4()) & (1<<64)-1,
+        "name": "",
+        "emin": None,
+        "emax": None,
+        "spectrum": None,
+        "_energy": (None, None),
+        "_background": (None, None),
+        "bgtype": "shirley"}
 
     def __init__(self, **kwargs):
+        super().__init__()
         self._observers = []
         for attr in ("spectrum", "emin", "emax"):
             if attr not in kwargs:
                 raise TypeError("Missing property {}".format(attr))
+
         for (attr, default) in self._defaults.items():
-            if attr in kwargs and kwargs[attr] is not None:
-                setattr(self, attr, kwargs.get(attr, default))
-            else:
-                setattr(self, attr, default)
+            setattr(self, attr, kwargs.get(attr, default))
 
         if not self.name:
             self.name = "Region {}".format(len(self.spectrum.regions) + 1)
+        self.spectrum.subscribe(self.reprocess_callback)
+        self.subscribe(self.reprocess_callback)
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
+        self.emit("set", attr=name, value=value)
         if name in ("emin", "emax"):
-            self._background = "changed"
-            self._energy = "changed"
+            self._background = (None, None)
+            self._energy = (None, None)
 
     @property
     def background(self):
@@ -193,21 +188,25 @@ class Region(object):
     @property
     def energy(self):
         """Cuts out the energy from the overlaying spectrum."""
-        if self._energy[0] != "unchanged":
+        if self._energy[0] is None:
             idx1, idx2 = sorted([
                 np.searchsorted(self.spectrum.energy, self.emin),
                 np.searchsorted(self.spectrum.energy, self.emax)])
             self._energy = ("unchanged", self.spectrum.energy[idx1:idx2])
         return self._energy[1]
 
-    def reprocess(self):
+    def reprocess_callback(self, keyword, obj, **kwargs):
         """Recalculate background etc at next occasion."""
-        self._background = (None, None)
-        self._energy = (None, None)
+        if type(obj).__name__ == "Spectrum" and keyword == "reprocess":
+            self._background = (None, self._background[1])
+            self._energy = (None, self._background[1])
+        elif obj == self and keyword == "set":
+            if kwargs["attr"] == "bgtype":
+                self._background = (None, self._background[1])
+                self._energy = (None, self._background[1])
 
     def calculate_background(self):
         """Returns background subtracted intensity."""
-        # pylint: disable=too-many-locals
         idx1, idx2 = sorted([np.searchsorted(self.spectrum.energy, self.emin),
                              np.searchsorted(self.spectrum.energy, self.emax)])
         energy = self.spectrum.energy[idx1:idx2]
@@ -221,32 +220,79 @@ class Region(object):
             background = None
         return background
 
+    def subscribe(self, callback):
+        """Bind a new callback to this."""
+        self._observers.append(callback)
 
-class Peak(object):
-    """This object fits a peak in the real spectrum and is defined as part of
-    a Region."""
-    _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
-                 "name": "",
-                 "region": None,
-                 "spectrum": None}
-    def __init__(self, **kwargs):
+    def unsubscribe(self, callback):
+        """Unbind the callback."""
+        self._observers.remove(callback)
+
+    def emit(self, keyword, **kwargs):
+        """Emits to all obervers."""
+        for callback in self._observers:
+            callback(keyword, self, **kwargs)
+
+
+class RegionList(list):
+    """Contains regions, to be used by Spectrum class."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._observers = []
-        for attr in ("region",):
-            if attr not in kwargs:
-                raise TypeError("Missing property {}".format(attr))
-        for (attr, default) in self._defaults.items():
-            if attr in kwargs and kwargs[attr] is not None:
-                setattr(self, attr, kwargs.get(attr, default))
-            else:
-                setattr(self, attr, default)
 
-    def set_constraint(self, constraint, value):
-        """Sets a constraint for peak fitting."""
-        pass
+    def append(self, region):
+        super().append(region)
+        self.emit("append", region=region)
+        for callback in self._observers:
+            region.subscribe(callback)
 
-    def set_function(self, func):
-        """Sets the fitting function."""
-        pass
+    def remove(self, region):
+        super().remove(region)
+        self.emit("remove", region=region)
+
+    def subscribe(self, callback):
+        """Bind a new callback to this."""
+        self._observers.append(callback)
+        for region in self:
+            region.subscribe(callback)
+
+    def unsubscribe(self, callback):
+        """Unbind the callback."""
+        self._observers.remove(callback)
+        for region in self:
+            region.unsubscribe(callback)
+
+    def emit(self, keyword, **kwargs):
+        """Emits to all obervers."""
+        for callback in self._observers:
+            callback(keyword, self, **kwargs)
+
+
+# class Peak(object):
+#     """This object fits a peak in the real spectrum and is defined as part of
+#     a Region."""
+#     _defaults = {"sid": int(uuid.uuid4()) & (1<<64)-1,
+#                  "name": "",
+#                  "region": None,
+#                  "spectrum": None}
+#     def __init__(self, **kwargs):
+#         self._observers = []
+#         for attr in ("region",):
+#             if attr not in kwargs:
+#                 raise TypeError("Missing property {}".format(attr))
+#         for (attr, default) in self._defaults.items():
+#             if attr in kwargs and kwargs[attr] is not None:
+#                 setattr(self, attr, kwargs.get(attr, default))
+#             else:
+#                 setattr(self, attr, default)
+#
+#     def set_constraint(self, constraint, value):
+#         """Sets a constraint for peak fitting."""
+#         pass
+#
+#     def set_function(self, func):
+#         """Sets the fitting function."""
+#         pass
 
 
 class SpectrumContainer(list):
@@ -256,7 +302,7 @@ class SpectrumContainer(list):
                       "passenergy", "energy", "intensity"]
     def __init__(self):
         super().__init__()
-        self.observers = []
+        self._observers = []
         self.altered = True
         self.title = Spectrum.title
 
@@ -283,43 +329,41 @@ class SpectrumContainer(list):
                 spectrum.plot()
             else:
                 spectrum.unplot()
+        self.emit("plot")
+
+    def append(self, spectrum):
+        super().append(spectrum)
+        idx = self.index(spectrum)
+        self.emit("append", spectrum=spectrum, index=idx)
+        for callback in self._observers:
+            spectrum.subscribe(callback)
 
     def extend(self, spectra):
         for spectrum in spectra:
             self.append(spectrum)
 
-    def append(self, spectrum):
-        super().append(spectrum)
-        spectrum.subscribe(self.spectrum_callback)
-        idx = self.index(spectrum)
-        for callback in self.observers:
-            callback("append", spectrum=spectrum, index=idx)
-
     def remove(self, spectrum):
         idx = self.index(spectrum)
-        for callback in self.observers:
-            callback("remove", spectrum=spectrum, index=idx)
+        self.emit("remove", spectrum=spectrum, index=idx)
         super().remove(spectrum)
 
     def clear(self):
-        for callback in self.observers:
-            callback("clear")
+        self.emit("clear")
         super().clear()
 
     def subscribe(self, callback):
         """Bind a new callback of class_ to this."""
-        self.observers.append(callback)
+        self._observers.append(callback)
+        for spectrum in self:
+            spectrum.subscribe(callback)
 
     def unsubscribe(self, callback):
         """Unbind the callback."""
-        self.observers.remove(callback)
+        self._observers.remove(callback)
+        for spectrum in self:
+            spectrum.unsubscribe(callback)
 
-    def spectrum_callback(self, keyword, **kwargs):
-        """Manages signals from single spectra."""
-        if keyword == "set":
-            for callback in self.observers:
-                spectrum = kwargs["spectrum"]
-                attr = kwargs["attr"]
-                value = kwargs["value"]
-                callback("amend", spectrum=spectrum, attr=attr, value=value)
-            self.altered = True
+    def emit(self, keyword, **kwargs):
+        """Emits to all obervers."""
+        for callback in self._observers:
+            callback(keyword, self, **kwargs)
