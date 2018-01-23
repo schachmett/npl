@@ -14,7 +14,7 @@ class RegionManager(Gtk.Box):
     def __init__(self, parent):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.parent = parent
-        self.notebook = RegionNotebook(self.parent)
+        self.notebook = RegionNotebook()
         self.set_spectrum = self.notebook.set_spectrum
 
         self.add(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
@@ -39,15 +39,12 @@ class RegionManager(Gtk.Box):
 
 class RegionNotebook(Gtk.Notebook):
     """Includes all the widgets for region/peak settings."""
-    def __init__(self, parent, spectrum=None):
+    def __init__(self, spectrum=None):
         super().__init__()
         self.spectrum = spectrum
-        self.parent = parent
         self.set_scrollable(True)
         self.popup_enable()
         self.build()
-
-        self.refresh_canvas = self.parent.refresh_canvas
 
     def build(self):
         """Makes a page for each region."""
@@ -59,7 +56,6 @@ class RegionNotebook(Gtk.Notebook):
             page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
             getset = RegionGetSet(region)
-            getset.connect_all_signals(self.refresh_canvas)
             page.pack_start(getset, False, False, 0)
 
             pagelabel = Gtk.Label(str(region.name))
@@ -69,10 +65,9 @@ class RegionNotebook(Gtk.Notebook):
     def remove_region(self, *_ignore):
         """Deletes currently selected region."""
         page_num = self.get_current_page()
-        del self.spectrum.regions[page_num]
+        self.spectrum.regions.remove(self.spectrum.regions[page_num])
         self.clear()
         self.build()
-        self.refresh_canvas()
 
     def clear(self):
         """Clears the Notebook."""
@@ -92,43 +87,53 @@ class RegionGetSet(Gtk.Box):
     def __init__(self, region):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.region = region
-        self.add_energy_box()
+        self.add_energy_setting()
         self.add_background_type()
-        self.connect_all_signals(self.apply)
 
-    def connect_all_signals(self, func):
-        """Connects all active elements with given function."""
-        self.energy_entry.connect("activate", func)
-        self.bgcombo.connect("changed", func)
+    # def connect_all_signals(self, func):
+    #     """Connects all active elements with given function."""
+    #     self.energy_entry.connect("activate", func)
+    #     self.bgcombo.connect("changed", func)
 
-    def add_energy_box(self):
+    def add_energy_setting(self):
         """Adds a box for viewing and editing the energy boundaries of the
         region."""
+        def callback(entry):
+            """Callback for energy setting."""
+            energies = re.findall(r"\d+\.\d+|\d+", entry.get_text())
+            self.region.emin = float(energies[0])
+            self.region.emax = float(energies[1])
+
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(Gtk.Label("Energy", width_chars=15), False, False, 2)
-        self.energy_entry = Gtk.Entry(text="{:.2f} - {:.2f}"
-                                           "".format(self.region.emin,
-                                                     self.region.emax))
+        self.energy_entry = Gtk.Entry(
+            text="{:.2f} - {:.2f}".format(self.region.emin, self.region.emax))
+        self.energy_entry.connect("activate", callback)
         box.pack_start(self.energy_entry, True, True, 2)
         self.pack_start(box, False, False, 2)
 
     def add_background_type(self):
         """Adds a box for setting the background type in this region."""
+        def callback(combo):
+            """Callback for background type setting."""
+            self.region.bgtype = combo.get_active_text()
+
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        box.pack_start(Gtk.Label("Background Type", width_chars=15),
-                       False, False, 2)
+        box.pack_start(
+            Gtk.Label("Background Type", width_chars=15), False, False, 2)
         self.bgcombo = Gtk.ComboBoxText()
         self.bgcombo.set_entry_text_column(0)
         for i, bgtype in enumerate(self.region.bgtypes):
             self.bgcombo.append_text(bgtype)
             if bgtype == self.region.bgtype:
                 self.bgcombo.set_active(i)
+        self.bgcombo.connect("changed", callback)
         box.pack_start(self.bgcombo, True, True, 2)
         self.pack_start(box, False, False, 2)
 
-    def apply(self, *_ignore):
-        """Applies changes to the region."""
-        energies = re.findall(r"\d+\.\d+|\d+", self.energy_entry.get_text())
-        self.region.emin = float(energies[0])
-        self.region.emax = float(energies[1])
-        self.region.bgtype = self.bgcombo.get_active_text()
+    # def apply(self, *_ignore):
+    #     """Applies changes to the region."""
+    #     energies = re.findall(r"\d+\.\d+|\d+", self.energy_entry.get_text())
+    #     self.region.emin = float(energies[0])
+    #     self.region.emax = float(energies[1])
+    #     self.region.bgtype = self.bgcombo.get_active_text()
