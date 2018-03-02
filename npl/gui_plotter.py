@@ -3,7 +3,6 @@ provides means for altering its appearance."""
 # pylint: disable=wrong-import-position
 
 import os
-import re
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -17,8 +16,8 @@ import numpy as np
 
 from npl import __config__
 from npl.fileio import RSFHandler
-from npl.containers import Region
-from npl.custom_spanselector import SpanSelector
+from npl.plotter_elements import SpanSelector, DraggableVLine, PeakSelector
+from npl.gui_dialogs import SelectElementsDialog
 
 
 class CanvasBox(Gtk.Box):
@@ -53,7 +52,6 @@ class CanvasBox(Gtk.Box):
     def show_rsf(self, *_ignore):
         """ makes a SelectElementsDialog and hands the user input to the
         plotter """
-
         dialog = SelectElementsDialog(self.parent,
                                       self.rsf["elements"],
                                       self.rsf["source"])
@@ -65,16 +63,13 @@ class CanvasBox(Gtk.Box):
             self.refresh(keepaxes=True)
         dialog.destroy()
 
-    def create_region(self, spectra):
-        """Calls the plotter energy range selector method."""
-        if len(spectra) == 1:
-            self.figure.create_region(spectra[0])
-        else:
-            self.parent.message("More than one spectrum selected")
-
-    def get_span(self, callback):
+    def get_span(self, callback, **kwargs):
         """Just gets a span from the user."""
-        self.figure.get_span(callback)
+        self.figure.get_span(callback, **kwargs)
+
+    def draw_peak(self, callback):
+        """Lets the user draw a peak and calls callback(amplitude, fwhm)."""
+        self.figure.draw_peak(callback)
 
 
 class BeautifulFigure(Figure):
@@ -143,7 +138,13 @@ class SpectrumFigure(BeautifulFigure):
         super().__init__()
         rsf_file = os.path.join(__config__.get("general", "basedir"), "rsf.db")
         self.rsfhandler = RSFHandler(rsf_file)
-        self.span_selector = None
+        self.span_selector = SpanSelector(
+            self.ax, lambda *args: None, "horizontal", span_stays=True,
+            useblit=True)
+        self.span_selector.active = False
+        self.peak_selector = PeakSelector(
+            self.ax, lambda *args: None, peak_stays=False, useblit=True)
+        self.peak_selector.active = False
         self.dlines = []
 
     def plot_spectrum(self, spectrum):
@@ -173,7 +174,7 @@ class SpectrumFigure(BeautifulFigure):
         self.dlines.append(DraggableRegionBound(line, region, "emin"))
         line = self.ax.axvline(region.emax, 0, 1, **lineprops)
         self.dlines.append(DraggableRegionBound(line, region, "emax"))
-        region.calculate_background()
+        # region.calculate_background()
         if ("b" in region.spectrum.visibility
                 and region.background is not None):
             lineprops = {
@@ -183,6 +184,28 @@ class SpectrumFigure(BeautifulFigure):
                 "alpha": 1}
             self.ax.plot(
                 region.energy, region.background, **lineprops)
+
+    def plot_peaks(self, region):
+        """Peak and model plotting."""
+        lineprops = {
+            "color": "blue",
+            "linewidth": 1,
+            "linestyle": "--"}
+        if region.fit_intensity is not None:
+            self.ax.plot(
+                region.energy,
+                region.fit_intensity + region.background,
+                **lineprops)
+        lineprops = {
+            "color": "green",
+            "linewidth": 1,
+            "linestyle": "--"}
+        for peak in region.peaks:
+            if peak.fit_intensity is not None:
+                self.ax.plot(
+                    region.energy,
+                    peak.fit_intensity + region.background,
+                    **lineprops)
 
     def plot(self, container):
         """Plots a spectrum."""
@@ -197,6 +220,9 @@ class SpectrumFigure(BeautifulFigure):
             if "r" in spectrum.visibility:
                 for region in spectrum.regions:
                     self.plot_region(region)
+            if "p" in spectrum.visibility:
+                for region in spectrum.regions:
+                    self.plot_peaks(region)
 
     def plot_rsf(self, elements, source):
         """Plots RSF values for a certain element with given X-ray souce."""
@@ -224,45 +250,44 @@ class SpectrumFigure(BeautifulFigure):
                     color="black",
                     textcoords="data")
 
-    def create_region(self, spectrum):
-        """Makes a SpanSelector and creates a region from it."""
-        def on_region_selected(emin, emax):
-            """Creates a new region in Spectrum object."""
-            region = Region(spectrum=spectrum, emin=emin, emax=emax)
-            spectrum.regions.append(region)
-            region.emin = region.emin       #TODO fix this workaround
-            self.span_selector.active = False
-        self.span_selector = SpanSelector(
-            self.ax,
-            on_region_selected,
-            "horizontal",
-            span_stays=True,
-            useblit=True,
-            rectprops={
-                "alpha": 0.5,
-                "fill": False,
-                "edgecolor": "blue",
-                "linewidth": 2,
-                "linestyle": "-"})
-
-    def get_span(self, callback):
+    def get_span(self, callback, **kwargs):
         """Makes a SpanSelector and uses it."""
         def on_selected(emin, emax):
-            """Creates a new region in Spectrum object."""
+            """Callback for the SpanSelector."""
             self.span_selector.active = False
             callback(emin, emax)
-        self.span_selector = SpanSelector(
-            self.ax,
-            on_selected,
-            "horizontal",
-            span_stays=True,
-            useblit=True,
-            rectprops={
-                "alpha": 0.5,
-                "fill": False,
-                "edgecolor": "black",
-                "linewidth": 1,
-                "linestyle": "-"})
+        self.disable_actions()
+        rectprops = {}
+        rectprops["alpha"] = kwargs.get("alpha", 0.5)
+        rectprops["fill"] = kwargs.get("fill", False)
+        rectprops["edgecolor"] = kwargs.get("edgecolor", "black")
+        rectprops["linewidth"] = kwargs.get("linewidth", 1)
+        rectprops["linestyle"] = kwargs.get("linestyle", "-")
+        self.span_selector.set_rectprops(rectprops)
+        self.span_selector.onselect = on_selected
+        self.span_selector.active = True
+
+    def draw_peak(self, callback, **kwargs):
+        """Draws a rudimentary peak (a triangle -> sets maximum and fwhm)."""
+        def on_selected(center, amp, angle):
+            """Callback for the PeakSelector"""
+            self.peak_selector.active = False
+            callback(center, amp, angle)
+        self.disable_actions()
+        wedgeprops = {}
+        wedgeprops["alpha"] = kwargs.get("alpha", 0.5)
+        wedgeprops["fill"] = kwargs.get("fill", True)
+        wedgeprops["edgecolor"] = kwargs.get("edgecolor", "black")
+        wedgeprops["facecolor"] = kwargs.get("facecolor", "red")
+        wedgeprops["linewidth"] = kwargs.get("linewidth", 1)
+        self.peak_selector.set_wedgeprops(wedgeprops)
+        self.peak_selector.onselect = on_selected
+        self.peak_selector.active = True
+
+    def disable_actions(self):
+        """Disables all tools."""
+        self.span_selector.active = False
+        self.peak_selector.active = False
 
 
 class MPLNavBar(NavigationToolbar):
@@ -305,134 +330,6 @@ class MPLNavBar(NavigationToolbar):
             axs.set_navigate_mode(self._active)
 
 
-class SelectElementsDialog(Gtk.Dialog):
-    """Lets the user select elements and a source for rsf plotting."""
-    sources = ["Al", "Mg"]
-    def __init__(self, parent, default_elements=None, default_source=None):
-        super().__init__(
-            "Element Library", parent, 0,
-            ("_Cancel", Gtk.ResponseType.CANCEL, "_OK", Gtk.ResponseType.OK))
-        okbutton = self.get_widget_for_response(
-            response_id=Gtk.ResponseType.OK)
-        okbutton.set_can_default(True)
-        okbutton.grab_default()
-
-        self.box = self.get_content_area()
-        self.source_combo = Gtk.ComboBoxText()
-        self.source_combo.set_entry_text_column(0)
-        for colname in self.sources:
-            self.source_combo.append_text(colname)
-        if default_source in self.sources:
-            idx = self.sources.index(default_source)
-            self.source_combo.set_active(idx)
-        elif default_source != "":
-            self.source_combo.append_text(default_source)
-            self.source_combo.set_active(-1)
-        else:
-            self.source_combo.set_active(0)
-        self.elements_entry = Gtk.Entry()
-        self.elements_entry.set_text(" ".join(default_elements))
-
-        rowbox1 = Gtk.Box()
-        rowbox1.pack_start(
-            Gtk.Label("Source", width_chars=15, xalign=0), False, False, 10)
-        rowbox1.pack_start(self.source_combo, True, True, 10)
-        rowbox2 = Gtk.Box()
-        rowbox2.pack_start(
-            Gtk.Label("Elements", width_chars=15, xalign=0), False, False, 10)
-        rowbox2.pack_start(self.elements_entry, True, True, 10)
-        self.box.pack_start(rowbox1, False, False, 2)
-        self.box.pack_start(rowbox2, False, False, 2)
-        self.show_all()
-
-    def get_user_input(self):
-        """Gives elements and Sources selected."""
-        source = self.source_combo.get_active_text()
-        elementstring = self.elements_entry.get_text()
-        elements = re.findall(r"[\w]+", elementstring)
-        elements = [element.title() for element in elements]
-        return [elements, source]
-
-
-class DraggableVLine():
-    """A draggable vertical line in the plot."""
-    lock = None
-    def __init__(self, line):
-        self.line = line
-        self.press = None
-        self.background = None
-
-        self.connect()
-
-    def change_line(self, line):
-        """Gets another line to drag."""
-        self.disconnect()
-        self.line = line
-        self.connect()
-
-    def connect(self):
-        """Connect to the signals."""
-        self.cidpress = self.line.figure.canvas.mpl_connect(
-            "button_press_event", self.on_press)
-        self.cidrelease = self.line.figure.canvas.mpl_connect(
-            "button_release_event", self.on_release)
-        self.cidmotion = self.line.figure.canvas.mpl_connect(
-            "motion_notify_event", self.on_motion)
-
-    def disconnect(self):
-        """Disconnects from canvas signals."""
-        self.line.figure.canvas.mpl_disconnect(self.cidpress)
-        self.line.figure.canvas.mpl_disconnect(self.cidrelease)
-        self.line.figure.canvas.mpl_disconnect(self.cidmotion)
-
-    def on_press(self, event):
-        """When the mouse button is pressed."""
-        if event.inaxes != self.line.axes:
-            return
-        if self.lock is not None:
-            return
-        if not self.line.contains(event)[0]:
-            return
-
-        self.press = self.line.get_xdata(), event.xdata, event.ydata
-        self.lock = self
-
-        self.line.set_animated(True)
-        self.line.figure.canvas.draw()
-        self.background = self.line.figure.canvas.copy_from_bbox(
-            self.line.axes.bbox)
-        self.line.axes.draw_artist(self.line)
-        self.line.figure.canvas.blit(self.line.axes.bbox)
-
-    def on_release(self, _event):
-        """When the mouse button is released."""
-        if self.lock is not self:
-            return
-
-        self.press = None
-        self.lock = None
-
-        self.line.set_animated(False)
-        self.background = None
-        self.line.figure.canvas.draw()
-
-    def on_motion(self, event):
-        """When the mouse is moved in pressed state."""
-        if self.lock is not self:
-            return
-        if event.inaxes != self.line.axes:
-            return
-
-        xdata, xpress, _ = self.press
-        self.line.set_xdata(xdata)
-        xdiff = event.xdata - xpress
-        self.line.set_xdata([self.line.get_xdata()[0] + xdiff] * 2)
-
-        self.line.figure.canvas.restore_region(self.background)
-        self.line.axes.draw_artist(self.line)
-        self.line.figure.canvas.blit(self.line.axes.bbox)
-
-
 class DraggableRegionBound(DraggableVLine):
     """Takes a line marking a region boundary and makes it draggable."""
     def __init__(self, line, region, attr):
@@ -440,16 +337,14 @@ class DraggableRegionBound(DraggableVLine):
         self.region = region
         self.attr = attr
 
-    def on_release(self, _event):
+    def on_release(self, event):
         """When the mouse button is released."""
         if self.lock is not self:
             return
 
-        setattr(self.region, self.attr, self.line.get_xdata()[0])
+        if self.attr == "emin":
+            self.region.set(emin=self.line.get_xdata()[0])
+        if self.attr == "emax":
+            self.region.set(emax=self.line.get_xdata()[0])
 
-        self.press = None
-        self.lock = None
-
-        self.line.set_animated(False)
-        self.background = None
-        self.line.figure.canvas.draw()
+        super().on_release(event)
