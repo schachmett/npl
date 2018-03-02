@@ -7,6 +7,7 @@ import os
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gio, GLib, GdkPixbuf
+import numpy as np
 
 from npl import __appname__, __version__, __authors__, __config__
 from npl.fileio import FileParser, DBHandler
@@ -15,6 +16,8 @@ from npl.gui_treeview import (
     ContainerView, TreeViewFilterBar, ContainerContextMenu, SpectrumSettings)
 from npl.gui_regions import RegionManager
 from npl.gui_plotter import CanvasBox
+from npl.gui_dialogs import (
+    EditSpectrumDialog, AskForSaveDialog, SimpleFileFilter)
 
 
 class Npl(Gtk.Application):
@@ -107,10 +110,8 @@ class Npl(Gtk.Application):
         """Start new project."""
         really_do_it = self.ask_for_save()
         if really_do_it:
-            self.win.cview.model.clear()
             self.s_container.clear()
             self.s_container.altered = False
-            # self.win.refresh_canvas()
             self.project_fname = None
             __config__.set("io", "project_file", "None")
 
@@ -172,7 +173,6 @@ class Npl(Gtk.Application):
             self.s_container.append(spectrum)
         self.s_container.altered = False
         __config__.set("io", "project_file", self.project_fname)
-        # self.win.refresh_canvas()
 
     def do_add_spectrum(self, *_ignore):
         """Imports a spectrum file and adds it to the current container."""
@@ -209,7 +209,6 @@ class Npl(Gtk.Application):
         for spectrum in spectra:
             self.s_container.remove(spectrum)
         self.s_container.altered = True
-        # self.win.refresh_canvas()
 
     def do_edit_spectrum(self, *_ignore):
         """Edits spectrum spectrum."""
@@ -241,7 +240,6 @@ class MainWindow(Gtk.ApplicationWindow):
     # pylint: disable=too-many-instance-attributes
     def __init__(self, app):
         self.app = app
-        # self.app.s_container.set_refresher(self.refresh)
         self.app.s_container.subscribe(self.container_callback)
         super().__init__(title=__appname__, application=app)
         self.connect("delete-event", self.app.do_quit)
@@ -279,7 +277,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.cview.menu.set_doubleclick_action(*context_actions[0])
         self.filterbar = TreeViewFilterBar(
             self.cview, "Notes", hide_combo=True)
-        self.ssettings = SpectrumSettings(self)
+        self.spectrum_settings = SpectrumSettings(self)
         self.rview = RegionManager(self)
 
         self.build_window()
@@ -292,10 +290,11 @@ class MainWindow(Gtk.ApplicationWindow):
         scrollable.add(self.cview)
         cviewbox.pack_start(self.filterbar, False, False, 2)
         cviewbox.pack_start(scrollable, True, True, 2)
-        cviewbox.pack_start(self.ssettings, False, False, 2)
+        cviewbox.pack_start(self.spectrum_settings, False, False, 2)
 
         vpanes = Gtk.VPaned()
         vpanes.pack1(cviewbox, True, False)
+        self.rview.set_size_request(-1, 400)
         vpanes.pack2(self.rview, False, False)
         vpanes.set_wide_handle(True)
 
@@ -338,33 +337,53 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def do_debug(self, *_ignore):
         """Allows for testing stuff from GUI."""
-        print(self)
+        region = self.get_selected_region()
+        region.fit()
 
     def do_show_rsf(self, *_ignore):
-        """ calls the canvasbox method to show rsf values in plot """
+        """Calls the canvasbox method to show rsf values in plot."""
         self.canvasbox.show_rsf()
-
-    def do_create_region(self, *_ignore):
-        """ calls canvasbox method to select an energy range """
-        self.mpl_navbar.disable()
-        self.canvasbox.create_region(self.get_selected_spectra())
 
     def do_get_span(self, callback):
         """Gets a span from the user."""
         self.canvasbox.get_span(callback)
 
+    def do_create_region(self, *_ignore):
+        """Creates a region through the canvasbox.get_span method."""
+        spectra = self.get_selected_spectra()
+        if len(spectra) != 1:
+            self.message("More than one spectrum selected")
+            return
+        self.mpl_navbar.disable()
+        def create_region(emin, emax):
+            """Creates a new region, callback for CanvasBox.get_span."""
+            spectra[0].add_region(emin=emin, emax=emax)
+        self.canvasbox.get_span(create_region, linewidth=2, edgecolor="blue")
+
     def do_delete_regions(self, *_ignore):
         """Deletes regions of selected spectra."""
         spectra = self.get_selected_spectra()
         for spectrum in spectra:
-            spectrum.regions.clear()
+            spectrum.clear_regions()
         self.set_selected_spectra(spectra)
+
+    def do_create_peak(self, *_ignore):
+        """Lets the user draw a peak and creates a peak object from that."""
+        def create_peak(center, height, angle):
+            """Callback for CanvasBox.draw_peak."""
+            region = self.get_selected_region()
+            height = height - region.background_from_energy(center)
+            fwhm = np.tan(np.deg2rad(angle)) * height
+            region.add_peak(height=height, center=center, fwhm=fwhm)
+        self.mpl_navbar.disable()
+        self.canvasbox.draw_peak(create_peak)
 
     def do_show_selected(self, *_ignore):
         """Plots spectra that are selected in the SpectrumView."""
         spectra = self.get_selected_spectra()
         self.app.s_container.show_only(spectra)
-        self.ssettings.set_spectra(spectra)
+        self.spectrum_settings.set_spectra(spectra)
+        # TODO workaround: this counters the cview.amend() focus shift
         self.set_selected_spectra(spectra)
 
     def get_selected_spectra(self, *_ignore):
@@ -375,7 +394,11 @@ class MainWindow(Gtk.ApplicationWindow):
         """Sets the selection."""
         self.cview.set_selected_spectra(spectra)
 
-    def refresh(self, keepaxes=False, rview=True, canvas=True):
+    def get_selected_region(self, *_ignore):
+        """Returns the spectra currently selected in the RegionManager."""
+        return self.rview.get_selected_region()
+
+    def refresh(self, keepaxes=True, rview=True, canvas=True):
         """Refreshes rview and canvas."""
         # print("refresh")
         if rview:
@@ -387,31 +410,29 @@ class MainWindow(Gtk.ApplicationWindow):
         if canvas:
             self.canvasbox.refresh(keepaxes)
 
-    def container_callback(self, keyword, obj, **kwargs):
+    def container_callback(self, keyword, _obj, **kwargs):
         """Catches everything important from the SpectrumContainer."""
-        if type(obj).__name__ == "SpectrumContainer":
-            if keyword == "remove" and kwargs["spectrum"].visibility:
+        if keyword in ("changed_spectrum", "changed_region"):
+            dontkeep_list = ("bgtype", "norm")
+            keep_list = ("emin", "emax", "smoothness", "calibration")
+            altered_list = ( #dontkeep_list + keep_list + (
+                "name", "notes", "eis_region", "fname", "sweeps", "dwelltime",
+                "passenergy")
+            if any([attr in kwargs for attr in dontkeep_list]):
+                self.refresh(keepaxes=False)
+                self.app.s_container.altered = True
+            elif any([attr in kwargs for attr in keep_list]):
                 self.refresh(keepaxes=True)
-            elif keyword in ("clear", "plot"):
-                self.refresh()
-        elif type(obj).__name__ == "Spectrum":
-            if keyword == "set":
-                if kwargs["attr"] in ("smoothness", "calibration"):
-                    if obj.visibility:
-                        self.refresh(keepaxes=True)
-                if kwargs["attr"] == "norm":
-                    if obj.visibility:
-                        self.refresh(keepaxes=False)
-        elif type(obj).__name__ == "Region":
-            if keyword == "set":
-                if kwargs["attr"] in ("emin", "emax", "bgtype"):
-                    if "r" in obj.spectrum.visibility:
-                        self.refresh(keepaxes=True)
-                    elif "d" in obj.spectrum.visibility:
-                        self.refresh(canvas=False)
-        elif type(obj).__name__ == "RegionList":
-            if keyword in ("append", "remove"):
-                self.refresh(keepaxes=True)
+                self.app.s_container.altered = True
+            elif any([attr in kwargs for attr in altered_list]):
+                self.app.s_container.altered = True
+
+        elif keyword in ("clear_container", "plot"):
+            self.refresh(keepaxes=False)
+
+        elif keyword in ("remove_spectrum", "add_region", "remove_region",
+                         "add_peak", "remove_peak", "fit", "changed_peak"):
+            self.refresh(keepaxes=True)
 
 
 class ToolBar(Gtk.Toolbar):
@@ -435,9 +456,6 @@ class ToolBar(Gtk.Toolbar):
             (os.path.join(
                 __config__.get("general", "basedir"), "icons/atom_lib.png"),
              self.parent.do_show_rsf))
-            # (os.path.join(__config__.get("general", "basedir"),
-            #               "icons/xrangesel.png"),
-            #  self.parent.do_create_region))
         for icon_name, callback in self.toolitems:
             if icon_name is None:
                 self.insert(Gtk.SeparatorToolItem(), -1)
@@ -450,107 +468,3 @@ class ToolBar(Gtk.Toolbar):
                 tbutton.set_icon_name(icon_name)
             self.insert(tbutton, -1)
             tbutton.connect("clicked", callback)
-
-
-class EditSpectrumDialog(Gtk.Dialog):
-    """Shows a dialog with entries to change metadata, needs a parent and
-    a list of spectra."""
-    excluding_key = " (multiple)"
-
-    def __init__(self, parent, spectra, attrs=None):
-        super().__init__(
-            "Settings",
-            parent,
-            0,
-            ("_Cancel", Gtk.ResponseType.CANCEL, "_OK", Gtk.ResponseType.OK))
-        if not spectra:
-            self.response(Gtk.ResponseType.CANCEL)
-            return
-        self.set_size_request(300, -1)
-        okbutton = self.get_widget_for_response(
-            response_id=Gtk.ResponseType.OK)
-        okbutton.set_can_default(True)
-        okbutton.grab_default()
-
-        self.spectra = spectra
-        self.entries = []
-        self.multiple = len(spectra) != 1
-        self.box = self.get_content_area()
-        if attrs is None:
-            attrs = sorted(list(self.spectra[0].titles.keys()))
-        self.titles = [(attr, spectra[0].title(attr)) for attr in attrs]
-
-        self.build_window()
-        self.show_all()
-
-    def build_window(self):
-        """Creates the labels and entries and orders them."""
-        fnamebox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        fname_title_label = Gtk.Label(label="Filename(s):", width_chars=15)
-        fnames = ""
-        for spectrum in self.spectra:
-            fnames += spectrum.fname + "\n"
-        fnames = fnames.strip()
-        fnames_label = Gtk.Label(label=fnames)
-        fnamebox.pack_start(fname_title_label, False, False, 10)
-        fnamebox.pack_start(fnames_label, True, True, 10)
-        self.box.pack_start(fnamebox, False, False, 5)
-
-        for (attr, title) in self.titles:
-            self.box.pack_start(self.generate_entry(attr, title),
-                                False, False, 2)
-
-    def generate_entry(self, attr, title):
-        """Makes an entry with a specific title for a spectrum key."""
-        if not self.multiple:
-            value = str(getattr(self.spectra[0], attr))
-        else:
-            values = []
-            for spectrum in self.spectra:
-                values.append(str(getattr(spectrum, attr)))
-            value = " | ".join(set(values)) + self.excluding_key
-
-        label = Gtk.Label(label=title, width_chars=15)
-        entry = Gtk.Entry(text=value)
-        entry.set_activates_default(True)
-        self.entries.append(entry)
-
-        rowbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        rowbox.pack_start(label, False, False, 10)
-        rowbox.pack_start(entry, True, True, 10)
-        return rowbox
-
-    def change_values(self):
-        """Actually changes the values of the spectra."""
-        for spectrum in self.spectra:
-            for i, (attr, _title) in enumerate(self.titles):
-                new_value = self.entries[i].get_text()
-                if self.excluding_key not in new_value:
-                    setattr(spectrum, attr, new_value)
-
-
-class AskForSaveDialog(Gtk.Dialog):
-    """Asks if you are sure to quit/make new file without saving."""
-    def __init__(self, parent):
-        super().__init__("Save current file?", parent, 0,
-                         ("_Cancel", Gtk.ResponseType.CANCEL,
-                          "_No", Gtk.ResponseType.NO,
-                          "_Yes", Gtk.ResponseType.YES))
-        yesbutton = self.get_widget_for_response(
-            response_id=Gtk.ResponseType.YES)
-        yesbutton.set_can_default(True)
-        yesbutton.grab_default()
-        self.box = self.get_content_area()
-        text = Gtk.Label("Save changes to current project?")
-        self.box.pack_start(text, True, True, 10)
-        self.show_all()
-
-
-class SimpleFileFilter(Gtk.FileFilter):
-    """Simpler FileFilter for FileChooserDialogs with better constructor."""
-    def __init__(self, name, patterns):
-        """ filter for file chooser dialogs """
-        super().__init__()
-        for pattern in patterns:
-            self.add_pattern(pattern)
-        self.set_name(name)

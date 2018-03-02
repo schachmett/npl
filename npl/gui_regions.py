@@ -1,5 +1,5 @@
-"""Provides a widget that shows detailed information on a given spectrum,
-including regions and peak fits."""
+"""Provides a widget that shows detailed information on and provides
+interaction with regions of a given spectrum."""
 # pylint: disable=wrong-import-position
 
 import re
@@ -8,14 +8,18 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from npl.gui_peaks import PeakManager
+
 
 class RegionManager(Gtk.Box):
     """Has a header and allows for adding regions and displays them."""
     def __init__(self, parent):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.parent = parent
-        self.notebook = RegionNotebook()
+        self.notebook = RegionNotebook(self)
+
         self.set_spectrum = self.notebook.set_spectrum
+        self.get_selected_region = self.notebook.get_selected_region
 
         self.add(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
@@ -26,6 +30,7 @@ class RegionManager(Gtk.Box):
         self.addbutton.connect("clicked", self.parent.do_create_region)
         self.rembutton = Gtk.Button(None, image=rem_img)
         self.rembutton.connect("clicked", self.notebook.remove_region)
+
         buttonbox = Gtk.Box()
         buttonbox.pack_start(Gtk.Label("Regions"), True, True, 0)
         buttonbox.pack_start(self.addbutton, False, False, 0)
@@ -34,14 +39,13 @@ class RegionManager(Gtk.Box):
         self.add(buttonbox)
         self.add(self.notebook)
 
-        self.set_size_request(-1, 200)
-
 
 class RegionNotebook(Gtk.Notebook):
     """Includes all the widgets for region/peak settings."""
-    def __init__(self, spectrum=None):
+    def __init__(self, rmanager, spectrum=None):
         super().__init__()
         self.spectrum = spectrum
+        self.rmanager = rmanager
         self.set_scrollable(True)
         self.popup_enable()
         self.build()
@@ -56,16 +60,23 @@ class RegionNotebook(Gtk.Notebook):
             page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
             getset = RegionGetSet(region)
+            pview = PeakManager(self.rmanager.parent, region=region)
             page.pack_start(getset, False, False, 0)
+            page.pack_start(pview, False, False, 0)
 
             pagelabel = Gtk.Label(str(region.name))
             self.append_page(page, pagelabel)
         self.show_all()
 
+    def get_selected_region(self):
+        """Returns selected region."""
+        page_num = self.get_current_page()
+        return self.spectrum.regions[page_num]
+
     def remove_region(self, *_ignore):
         """Deletes currently selected region."""
-        page_num = self.get_current_page()
-        self.spectrum.regions.remove(self.spectrum.regions[page_num])
+        region = self.get_selected_region()
+        self.spectrum.remove_region(region)
         self.clear()
         self.build()
 
@@ -90,50 +101,39 @@ class RegionGetSet(Gtk.Box):
         self.add_energy_setting()
         self.add_background_type()
 
-    # def connect_all_signals(self, func):
-    #     """Connects all active elements with given function."""
-    #     self.energy_entry.connect("activate", func)
-    #     self.bgcombo.connect("changed", func)
-
     def add_energy_setting(self):
         """Adds a box for viewing and editing the energy boundaries of the
         region."""
         def callback(entry):
             """Callback for energy setting."""
             energies = re.findall(r"\d+\.\d+|\d+", entry.get_text())
-            self.region.emin = float(energies[0])
-            self.region.emax = float(energies[1])
+            self.region.set(emin=float(energies[0]), emax=float(energies[1]))
+
+        entry = Gtk.Entry(
+            text="{:.2f} - {:.2f}".format(self.region.emin, self.region.emax))
+        entry.connect("activate", callback)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(Gtk.Label("Energy", width_chars=15), False, False, 2)
-        self.energy_entry = Gtk.Entry(
-            text="{:.2f} - {:.2f}".format(self.region.emin, self.region.emax))
-        self.energy_entry.connect("activate", callback)
-        box.pack_start(self.energy_entry, True, True, 2)
+        box.pack_start(entry, True, True, 2)
         self.pack_start(box, False, False, 2)
 
     def add_background_type(self):
         """Adds a box for setting the background type in this region."""
         def callback(combo):
             """Callback for background type setting."""
-            self.region.bgtype = combo.get_active_text()
+            self.region.set(bgtype=combo.get_active_text())
+
+        combo = Gtk.ComboBoxText()
+        combo.set_entry_text_column(0)
+        for i, bgtype in enumerate(self.region.bgtypes):
+            combo.append_text(bgtype)
+            if bgtype == self.region.bgtype:
+                combo.set_active(i)
+        combo.connect("changed", callback)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(
             Gtk.Label("Background Type", width_chars=15), False, False, 2)
-        self.bgcombo = Gtk.ComboBoxText()
-        self.bgcombo.set_entry_text_column(0)
-        for i, bgtype in enumerate(self.region.bgtypes):
-            self.bgcombo.append_text(bgtype)
-            if bgtype == self.region.bgtype:
-                self.bgcombo.set_active(i)
-        self.bgcombo.connect("changed", callback)
-        box.pack_start(self.bgcombo, True, True, 2)
+        box.pack_start(combo, True, True, 2)
         self.pack_start(box, False, False, 2)
-
-    # def apply(self, *_ignore):
-    #     """Applies changes to the region."""
-    #     energies = re.findall(r"\d+\.\d+|\d+", self.energy_entry.get_text())
-    #     self.region.emin = float(energies[0])
-    #     self.region.emax = float(energies[1])
-    #     self.region.bgtype = self.bgcombo.get_active_text()

@@ -10,6 +10,7 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GObject, Gdk, GdkPixbuf
 
 from npl import __config__
+from npl.gui_dialogs import GetCalibrationDialog
 
 
 class ContainerView(Gtk.TreeView):
@@ -176,7 +177,7 @@ class ContainerModel(GObject.GObject, Gtk.TreeModel):
         """
         if self.container:
             if iter_ is not None:
-                oldpath = self.container.get_idx_by_sid(iter_.user_data)[0]
+                oldpath = self.container.get_idx_by_sid(iter_.user_data)
                 if oldpath is None or len(self.container) <= oldpath + 1:
                     return (False, None)
                 if len(self.container) > oldpath + 1:
@@ -202,7 +203,7 @@ class ContainerModel(GObject.GObject, Gtk.TreeModel):
         """Returns tree path references by iter_."""
         if iter_ is not None:
             sid = iter_.user_data
-            idx = self.container.get_idx_by_sid(sid)[0]
+            idx = self.container.get_idx_by_sid(sid)
             if idx is None:
                 return None
             path = Gtk.TreePath((idx, ))
@@ -249,18 +250,17 @@ class ContainerModelIface(ContainerModel):
 
     def container_callback(self, keyword, obj, **kwargs):
         """Manages signals from the spectrum container."""
-        if type(obj).__name__ == "Spectrum":
-            if keyword == "set":
-                if kwargs["attr"] in obj.titles:
-                    self.amend(obj)
-        if type(obj).__name__ == "SpectrumContainer":
-            if keyword == "append":
-                self.append(kwargs["spectrum"])
-            elif keyword == "remove":
-                iter_ = self.get_iter(kwargs["index"])
-                self.remove(iter_)
-            elif keyword == "clear":
-                self.clear()
+        if keyword == "changed_spectrum":
+            if any([attr in kwargs for attr in obj.titles]):
+                # TODO make this solid (avoiding shifting focus in the cview)
+                self.amend(obj)
+        elif keyword == "add_spectrum":
+            self.append(kwargs["spectrum"])
+        elif keyword == "remove_spectrum":
+            iter_ = self.get_iter(kwargs["index"])
+            self.remove(iter_)
+        elif keyword == "clear_container":
+            self.clear()
 
     def append(self, spectrum, path=None, iter_=None):
         """Adds a spectrum to the model."""
@@ -283,212 +283,12 @@ class ContainerModelIface(ContainerModel):
         iter_ = Gtk.TreeIter()
         iter_.user_data = spectrum.sid
         self.remove(iter_)
-        self.append(spectrum)
+        self.append(spectrum)   # TODO this shifts the focus in the cview
 
     def clear(self):
         """Removes every row."""
-        for idx in range(len(self.container)):
-            iter_ = self.get_iter((idx, ))
-            self.remove(iter_)
-
-
-class SpectrumSettings(Gtk.Box):
-    """A box with settings for single spectra."""
-    # pylint: disable=attribute-defined-outside-init
-    def __init__(self, parent, spectra=None):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL)
-        if spectra is None:
-            self.spectra = []
-        else:
-            self.spectra = spectra
-        self.parent = parent
-        self.build()
-
-    def build(self):
-        """Builds elements."""
-        self.add_smoothing_setting()
-        self.add_calibration_setting()
-        self.add_norm_button()
-        # self.connect_all_signals(self.apply)
-        self.show_all()
-
-    def clear(self):
-        """Clears box."""
-        for child in self.get_children():
-            self.remove(child)
-
-    def add_smoothing_setting(self):
-        """Adds a box for setting smoothness of the spectrum."""
-        def callback(scale):
-            """Callback for smoothscale."""
-            for spectrum in self.spectra:
-                spectrum.smoothness = int(scale.get_value())
-        adj = Gtk.Adjustment(0, 0, 40, 2, 2, 0)
-        self.smoothscale = Gtk.Scale(
-            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
-        self.smoothscale.set_digits(0)
-        self.smoothscale.set_value_pos(Gtk.PositionType.LEFT)
-        self.smoothscale.set_hexpand(True)
-        self.smoothscale.connect("value-changed", callback)
-        if not self.spectra:
-            self.smoothscale.set_range(50, 50)
-            self.smoothscale.set_draw_value(False)
-        else:
-            self.smoothscale.set_range(0, 40)
-            self.smoothscale.set_draw_value(True)
-            self.smoothscale.set_value(self.spectra[0].smoothness)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        box.pack_start(
-            Gtk.Label(" Smoothing", width_chars=15, xalign=0), False, True, 2)
-        box.pack_start(self.smoothscale, True, True, 2)
-        self.pack_start(box, False, False, 2)
-
-    def add_norm_button(self):
-        """Adds a box for norming the spectrum."""
-        def callback(button):
-            """Callback for normbutton."""
-            for spectrum in self.spectra:
-                spectrum.norm = int(button.get_active())
-        icon_path = os.path.join(
-            __config__.get("general", "basedir"), "icons/divide16.png")
-        norm_img = Gtk.Image.new_from_file(icon_path)
-        self.normbutton = Gtk.ToggleButton(label=" Normalize", image=norm_img)
-        self.normbutton.set_always_show_image(True)
-        self.normbutton.connect("clicked", callback)
-        if not self.spectra:
-            self.normbutton.set_inconsistent(True)
-        elif len(set([spectrum.norm for spectrum in self.spectra])) <= 1:
-            self.normbutton.set_inconsistent(False)
-            self.normbutton.set_active(self.spectra[0].norm)
-        else:
-            self.normbutton.set_inconsistent(True)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        box.pack_start(self.normbutton, False, False, 2)
-        self.pack_start(box, False, False, 2)
-
-    def add_calibration_setting(self):
-        """Adds a box for setting the energy calibration."""
-        def entry_callback(entry):
-            """Callback for calentry."""
-            for spectrum in self.spectra:
-                if not entry.get_text() == "multiple":
-                    spectrum.calibration = float(entry.get_text())
-
-        def button_callback(_button):
-            """Callback for calbutton."""
-            def dialog_response(dialog, response):
-                """Callback for the dialog."""
-                if response == Gtk.ResponseType.OK:
-                    cal = dialog.get_calibration()
-                    if cal:
-                        if len(set(cal)) <= 1:
-                            self.calentry.set_text("{:.2f}".format(cal[0]))
-                        else:
-                            self.calentry.set_text("multiple")
-                        for i, spectrum in enumerate(self.spectra):
-                            spectrum.calibration = cal[i]
-                dialog.destroy()
-            self.parent.mpl_navbar.disable()
-            getcal_dialog = GetCalibrationDialog(self.parent, self.spectra)
-            getcal_dialog.show()
-            getcal_dialog.connect("response", dialog_response)
-
-        self.calentry = Gtk.Entry(width_chars=6)
-        self.calentry.connect("activate", entry_callback)
-        icon_path = os.path.join(
-            __config__.get("general", "basedir"), "icons/calibrate.png")
-        cal_img = Gtk.Image.new_from_file(icon_path)
-        self.calbutton = Gtk.Button(image=cal_img)
-        self.calbutton.connect("clicked", button_callback)
-
-        if self.spectra:
-            if len(set([spectrum.calibration
-                        for spectrum in self.spectra])) <= 1:
-                self.calentry.set_text(
-                    "{:.2f}".format(self.spectra[0].calibration))
-            else:
-                self.calentry.set_text("multiple")
-        else:
-            self.calentry.set_text("0.00")
-
-
-        box = Gtk.Box()
-        box.pack_start(
-            Gtk.Label(" Calibration", width_chars=15, xalign=0),
-            False, True, 2)
-        box.pack_start(self.calbutton, False, False, 2)
-        box.pack_start(self.calentry, False, False, 2)
-        box.pack_start(Gtk.Label("eV", width_chars=2), False, False, 2)
-        self.pack_start(box, False, False, 2)
-
-    def set_spectra(self, spectra):
-        """Sets the spectra to work with."""
-        self.spectra = spectra
-        self.clear()
-        self.build()
-
-
-class GetCalibrationDialog(Gtk.Dialog):
-    """Lets the user select a region where the maximum is detected, then
-    the user can project this maximum to a given energy value, resulting
-    in a calibration value."""
-    def __init__(self, parent, spectra):
-        super().__init__(
-            "Semi-automatic calibration", parent,
-            Gtk.DialogFlags.DESTROY_WITH_PARENT,
-            ("_Cancel", Gtk.ResponseType.CANCEL, "_OK", Gtk.ResponseType.OK))
-        okbutton = self.get_widget_for_response(
-            response_id=Gtk.ResponseType.OK)
-        okbutton.set_can_default(True)
-        okbutton.grab_default()
-        self.set_modal(False)
-
-        self.box = self.get_content_area()
-        self.spectra = spectra
-        self.parent = parent
-
-        self.getspan_button = Gtk.Button(label="Get span")
-        self.calfrom_label = Gtk.Label("Select a peak", width_chars=10)
-        self.calto_entry = Gtk.Entry(text="", width_chars=6)
-
-        self.getspan_button.connect("clicked", self.get_span)
-        self.calfrom = []
-
-        rowbox = Gtk.Box()
-        rowbox.pack_start(self.getspan_button, False, False, 2)
-        rowbox.pack_start(self.calfrom_label, False, False, 2)
-        rowbox.pack_start(self.calto_entry, False, False, 2)
-        rowbox.pack_start(Gtk.Label("eV", width_chars=2), False, False, 2)
-        self.box.pack_start(rowbox, False, False, 0)
-        self.show_all()
-
-    def get_span(self, _widget):
-        """Gets the span from which the maximum is taken."""
-        self.calfrom = []
-        def span_callback(emin, emax):
-            """Callback for SpanSelector."""
-            span = (emin, emax)
-            for spectrum in self.spectra:
-                self.calfrom.append(spectrum.get_energy_at_maximum(span))
-            if len(set(self.calfrom)) <= 1:
-                self.calfrom_label.set_text(
-                    "{:.2f} eV ->".format(self.calfrom[0]))
-            else:
-                self.calfrom_label.set_text("multiple")
-        self.parent.do_get_span(span_callback)
-
-    def get_calibration(self):
-        """Returns the actual calibration value."""
-        calto = float(self.calto_entry.get_text())
-        if self.calfrom:
-            calibration = []
-            for i, spectrum in enumerate(self.spectra):
-                calibration.append(
-                    calto - self.calfrom[i] + spectrum.calibration)
-            return calibration
-        return None
+        for idx in range(len(self.container), -1, -1):
+            self.row_deleted(idx)
 
 
 class TreeViewFilterBar(Gtk.Box):
@@ -572,3 +372,145 @@ class ContainerContextMenu(Gtk.Menu):
         else:
             callback = self.actions[0][1]
         self.do_action(callback)
+
+
+class SpectrumSettings(Gtk.Box):
+    """A box with settings for single spectra."""
+    def __init__(self, parent, spectra=None):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        if spectra is None:
+            self.spectra = []
+        else:
+            self.spectra = spectra
+        self.parent = parent
+        self.build()
+
+    def build(self):
+        """Builds elements."""
+        self.add_smoothing_setting()
+        self.add_calibration_setting()
+        self.add_norm_button()
+        self.show_all()
+
+    def clear(self):
+        """Clears box."""
+        for child in self.get_children():
+            self.remove(child)
+
+    def add_smoothing_setting(self):
+        """Adds a box for setting smoothness of the spectrum."""
+        def callback(scale):
+            """Callback for smoothscale."""
+            for spectrum in self.spectra:
+                spectrum.set(smoothness=int(scale.get_value()))
+        adj = Gtk.Adjustment(0, 0, 40, 2, 2, 0)
+        scale = Gtk.Scale(
+            orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
+        scale.set_digits(0)
+        scale.set_value_pos(Gtk.PositionType.LEFT)
+        scale.set_hexpand(True)
+        scale.connect("value-changed", callback)
+        if not self.spectra:
+            scale.set_range(50, 50)
+            scale.set_draw_value(False)
+        else:
+            scale.set_range(0, 40)
+            scale.set_draw_value(True)
+            scale.set_value(self.spectra[0].smoothness)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(
+            Gtk.Label(" Smoothing", width_chars=15, xalign=0), False, True, 2)
+        box.pack_start(scale, True, True, 2)
+        self.pack_start(box, False, False, 2)
+
+    def add_norm_button(self):
+        """Adds a box for norming the spectrum."""
+        button = Gtk.ToggleButton(label=" Normalize")
+
+        def callback(button):
+            """Callback for normbutton."""
+            for spectrum in self.spectra:
+                spectrum.set(norm=int(button.get_active()))
+
+        icon_path = os.path.join(
+            __config__.get("general", "basedir"), "icons/divide16.png")
+        norm_img = Gtk.Image.new_from_file(icon_path)
+        button.set_image(norm_img)
+        button.set_always_show_image(True)
+        button.connect("clicked", callback)
+        if not self.spectra:
+            button.set_inconsistent(True)
+        elif len(set([spectrum.norm for spectrum in self.spectra])) <= 1:
+            button.set_inconsistent(False)
+            button.set_active(self.spectra[0].norm)
+        else:
+            button.set_inconsistent(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(button, False, False, 2)
+        self.pack_start(box, False, False, 2)
+
+    def add_calibration_setting(self):
+        """Adds a box for setting the energy calibration."""
+        entry = Gtk.Entry(width_chars=6)
+        button = Gtk.Button()
+
+        def entry_callback(entry):
+            """Callback for calentry."""
+            for spectrum in self.spectra:
+                if not entry.get_text() == "multiple":
+                    spectrum.set(calibration=float(entry.get_text()))
+
+        def button_callback(_button):
+            """Callback for calbutton."""
+            def dialog_response(dialog, response):
+                """Callback for the dialog."""
+                if response == Gtk.ResponseType.OK:
+                    cal = dialog.get_calibration()
+                    if cal:
+                        if len(set(cal)) <= 1:
+                            entry.set_text("{:.2f}".format(cal[0]))
+                        else:
+                            entry.set_text("multiple")
+                        for i, spectrum in enumerate(self.spectra):
+                            spectrum.set(calibration=cal[i])
+                else:
+                    self.parent.refresh(keepaxes=True)
+                dialog.destroy()
+            self.parent.mpl_navbar.disable()
+            getcal_dialog = GetCalibrationDialog(self.parent, self.spectra)
+            getcal_dialog.show()
+            getcal_dialog.connect("response", dialog_response)
+
+        entry.connect("activate", entry_callback)
+        if self.spectra:
+            if len(set([spectrum.calibration
+                        for spectrum in self.spectra])) <= 1:
+                entry.set_text(
+                    "{:.2f}".format(self.spectra[0].calibration))
+            else:
+                entry.set_text("multiple")
+        else:
+            entry.set_text("0.00")
+
+        icon_path = os.path.join(
+            __config__.get("general", "basedir"), "icons/calibrate.png")
+        cal_img = Gtk.Image.new_from_file(icon_path)
+        button.set_image(cal_img)
+        button.connect("clicked", button_callback)
+
+        box = Gtk.Box()
+        box.pack_start(
+            Gtk.Label(" Calibration", width_chars=15, xalign=0),
+            False, True, 2)
+        box.pack_start(button, False, False, 2)
+        box.pack_start(entry, False, False, 2)
+        box.pack_start(Gtk.Label("eV", width_chars=2), False, False, 2)
+        self.pack_start(box, False, False, 2)
+
+    def set_spectra(self, spectra):
+        """Sets the spectra to work with."""
+        self.spectra = spectra
+        self.clear()
+        self.build()
