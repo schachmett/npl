@@ -47,7 +47,7 @@ class FileParser():
         data["dwelltime"] = float(header[1][7])
         data["passenergy"] = float(header[1][9])
         data["notes"] = header[1][12]
-        data["visibility"] = None
+        data["visibility"] = ""
         data["name"] = str()
         if header[3][0] != "1":
             return None
