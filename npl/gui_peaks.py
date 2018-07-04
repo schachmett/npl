@@ -4,7 +4,14 @@ interation with peaks of a given region."""
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+from gi.repository import Gtk, Gdk
+
+
+PEAK_TITLES = {
+    "fwhm": "FWHM",
+    "center": "Position",
+    "name": "Name",
+    "area": "Area"}
 
 
 class PeakManager(Gtk.Box):
@@ -18,8 +25,17 @@ class PeakManager(Gtk.Box):
         self.add(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         headerbox = self.build_header()
         self.add(headerbox)
-        databox = self.build_peakdata()
-        self.add(databox)
+
+        self.view = PeakView(
+            self, peaks=self.region.peaks,
+            attrs=["name", "center", "fwhm", "area"])
+        scrollable = Gtk.ScrolledWindow()
+        scrollable.set_property("min-content-height", 100)
+        scrollable.add(self.view)
+        self.pack_start(scrollable, True, True, 0)
+
+        self.psettings = PeakControl(self, peak=None)
+        self.pack_start(self.psettings, False, False, 0)
 
     def build_header(self):
         """Builds the header row containing "Peaks" title and buttons."""
@@ -34,7 +50,7 @@ class PeakManager(Gtk.Box):
         rem_img = Gtk.Image.new_from_icon_name(
             "list-remove", Gtk.IconSize.BUTTON)
         rembutton = Gtk.Button(None, image=rem_img)
-        rembutton.connect("clicked", self.remove_peak)
+        rembutton.connect("clicked", self.remove_peaks)
 
         buttonbox = Gtk.Box()
         buttonbox.pack_start(fitbutton, False, False, 0)
@@ -43,26 +59,162 @@ class PeakManager(Gtk.Box):
         buttonbox.pack_start(rembutton, False, False, 0)
         return buttonbox
 
-    def build_peakdata(self):
-        """Builds single peak boxes and combines them."""
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        headstring = "{:<15}{:>10}{:>10}{:>10}".format(
-            "Name", "Center", "Height", "FWHM")
-        box.pack_start(Gtk.Label(headstring), True, True, 0)
-        for peak in self.region.peaks:
-            row = self.build_peakrow(peak)
-            box.add(row)
-        return box
+    def remove_peaks(self, *_ignore):
+        """Removes peak."""
+        peaks = self.view.get_selected_peaks()
+        for peak in peaks:
+            self.region.remove_peak(peak)
 
-    @staticmethod
-    def build_peakrow(peak):
-        """Makes a horizontal Box for a specific peak."""
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        peakstring = "{:<15}{:>10.2f}{:>10.2f}{:>10.2f}".format(
-            peak.name, peak.center, peak.height, peak.fwhm)
-        row.pack_start(Gtk.Label(peakstring), True, True, 0)
+
+class PeakView(Gtk.TreeView):
+    """Treeview that displays Peak details."""
+    def __init__(self, manager, peaks, attrs):
+        super().__init__()
+        self.manager = manager
+        self.peaks = peaks
+        self.attrs = attrs
+        self.model = self.make_model()
+        self.sortable_model = Gtk.TreeModelSort(self.model)
+
+        self.set_model(self.sortable_model)
+        self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+        self.set_rules_hint(True)
+
+        self.connect("button-press-event", self.on_row_clicked)
+
+        self.make_columns()
+
+    def refresh(self):
+        """Refreshes the view."""
+        self.model = self.make_model()
+        self.sortable_model = Gtk.TreeModelSort(self.model)
+        self.set_model(self.sortable_model)
+        # self.make_columns()
+
+    def make_model(self):
+        """Makes a ListStore and fills it with data, returns the model."""
+        types = [str] * len(self.attrs)
+        model = Gtk.ListStore(*types)
+        for peak in self.peaks:
+            row = []
+            for attr in self.attrs:
+                value = getattr(peak, attr)
+                if isinstance(value, float):
+                    row.append("{:.2f}".format(value))
+                elif isinstance(value, int):
+                    row.append(str(value))
+                else:
+                    row.append(value)
+            model.append(row)
+        return model
+
+    def make_columns(self):
+        """Makes columns."""
+        for i, attr in enumerate(self.attrs):
+            renderer = Gtk.CellRendererText()
+            column = Gtk.TreeViewColumn(PEAK_TITLES[attr], renderer, text=i)
+            column.set_resizable(True)
+            column.set_reorderable(True)
+            self.append_column(column)
+
+    def get_selected_peaks(self):
+        """Returns list of currently selected Peak objects."""
+        _model, pathlist = self.get_selection().get_selected_rows()
+        peaks = []
+        for path in pathlist:
+            index = path.get_indices()[0]
+            peaks.append(self.peaks[index])
+        return peaks
+
+    def on_row_clicked(self, treeview, event):
+        """Callback for context menu."""
+        posx = int(event.x)
+        posy = int(event.y)
+        pathinfo = treeview.get_path_at_pos(posx, posy)
+        if pathinfo is None:
+            return True
+        path, _col, _cellx, _celly = pathinfo
+        peak = self.peaks[path.get_indices()[0]]
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 1:
+            self.manager.psettings.set_peak(peak)
+            return path in self.get_selection().get_selected_rows()[1]
+
+
+class PeakControl(Gtk.ListBox):
+    """Makes methods for setting constraints etc available to the user."""
+    def __init__(self, manager, peak):
+        super().__init__()
+        self.manager = manager
+        self.peak = peak
+        self.build()
+
+    def build(self):
+        """Builds the box."""
+        if self.peak is None:
+            return
+        row = self.get_name_row()
+        self.add(row)
+        for attr in ["center", "fwhm", "area"]:
+            row = self.get_min_max_expr_row(attr)
+            self.add(row)
+        self.show_all()
+
+    def get_name_row(self):
+        """Row for setting the peak name."""
+        def callback(entry):
+            """Callback for the entry."""
+            self.peak.name = entry.get_text()
+            self.manager.view.refresh()
+        label = Gtk.Label("Name", width_chars=15)
+        entry = Gtk.Entry(text=self.peak.name)
+        entry.connect("activate", callback)
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        hbox.pack_start(label, False, False, 10)
+        hbox.pack_start(entry, True, True, 10)
+        row = Gtk.ListBoxRow()
+        row.add(hbox)
         return row
 
-    def remove_peak(self, peak):
-        """Removes peak."""
-        pass
+    def get_min_max_expr_row(self, attr):
+        """Returns a ListBoxRow that includes setting min/max value, actual
+        value, whether to vary and an expression for peak.attr."""
+        def min_callback(entry):
+            """Callback for the entry."""
+            self.peak.set_constraints(attr, min=float(entry.get_text()))
+        def max_callback(entry):
+            """Callback for the entry."""
+            self.peak.set_constraints(attr, max=float(entry.get_text()))
+        def expr_callback(entry):
+            """Callback for the entry."""
+            self.peak.set_constraints(attr, expr=entry.get_text())
+        label = Gtk.Label(PEAK_TITLES[attr], width_chars=10)
+        min_entry = Gtk.Entry(text=self.peak.get_constraint(attr, "min"),
+                              width_chars=3)
+        min_entry.connect("activate", min_callback)
+        max_entry = Gtk.Entry(text=self.peak.get_constraint(attr, "max"),
+                              width_chars=3)
+        max_entry.connect("activate", max_callback)
+        expr_entry = Gtk.Entry(text=self.peak.get_constraint(attr, "expr"),
+                               width_chars=5)
+        expr_entry.connect("activate", expr_callback)
+
+        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        hbox.pack_start(label, False, False, 0)
+        hbox.pack_start(min_entry, True, True, 0)
+        hbox.pack_start(max_entry, True, True, 0)
+        hbox.pack_start(expr_entry, True, True, 0)
+        row = Gtk.ListBoxRow()
+        row.add(hbox)
+        return row
+
+    def set_peak(self, peak):
+        """Changes the peak to display."""
+        self.peak = peak
+        self.clear()
+        self.build()
+
+    def clear(self):
+        """Removes all widgets."""
+        for widget in self.get_children():
+            self.remove(widget)

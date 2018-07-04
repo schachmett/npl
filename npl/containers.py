@@ -3,6 +3,7 @@ metadata. Also provides SpectrumContainer, a list containing Spectrums
 and providing callback connection for changing Spectrums."""
 
 import uuid
+import re
 
 import numpy as np
 
@@ -52,6 +53,8 @@ class Spectrum(object):
         self._intensity = kwargs["intensity"]
         self.intensity = self._intensity
         self.regions = []
+
+        self.regionname = 0
 
         for (attr, default) in self._defaults.items():
             setattr(self, attr, kwargs.get(attr, default))
@@ -148,6 +151,7 @@ class Region(object):
     """A region is a part of a spectrum."""
     # pylint: disable=too-many-instance-attributes
     bgtypes = ("none", "shirley", "linear")
+    peaknames = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -166,6 +170,8 @@ class Region(object):
         self.intensity = None
         self.background = None
 
+        self.peakname = 0
+
         self.set(bgtype="shirley", emin=kwargs["emin"], emax=kwargs["emax"])
 
         self.peaks = []
@@ -173,7 +179,8 @@ class Region(object):
         self.fit_all = None
 
         self.name = kwargs.get(
-            "name", "Region {}".format(len(self.spectrum.regions) + 1))
+            "name", "Region {}".format(self.spectrum.regionname + 1))
+        self.spectrum.regionname += 1
 
     def set(self, **kwargs):
         """Change values that alter the Region: emin, emax, bgtype, energy,
@@ -238,6 +245,7 @@ class Region(object):
     def remove_peak(self, peak):
         """Removes a peak from self.peaks."""
         self.peaks.remove(peak)
+        self.model.remove_peak(peak)
         self.emit("remove_peak")
 
     def clear_peaks(self):
@@ -266,11 +274,11 @@ class Peak(object):
     # pylint: disable=attribute-defined-outside-init
     # pylint: disable=too-many-instance-attributes
     _defaults = {
-        "name": "testitesti",
+        "name": "",
         "region": None,
         "spectrum": None,
         "model_name": "PseudoVoigt",
-        "height": None,
+        "area": None,
         "center": None,
         "fwhm": None,
         "params": None,
@@ -285,23 +293,35 @@ class Peak(object):
         self.region = kwargs["region"]
         for (attr, default) in self._defaults.items():
             setattr(self, attr, kwargs.get(attr, default))
+        if not self.name:
+            self.name = self.region.peaknames[self.region.peakname]
+            self.region.peakname += 1
 
         self.prefix = "p{}_".format(self.sid)
         if self.spectrum is None:
             self.spectrum = self.region.spectrum
+
+        if "height" in kwargs and "area" not in kwargs and "fwhm" in kwargs:
+            self.area = (kwargs["height"]
+                         * (kwargs["fwhm"] * np.sqrt(np.pi / np.log(2)))
+                         / (1 + np.sqrt(1 / (np.pi * np.log(2)))))
 
         self.model = self.region.model
         self.model.add_peak(self)
         if self.guess:
             self.model.guess_params(self)
         else:
-            self.model.init_params(self, **kwargs)
+            self.model.init_params(
+                self, fwhm=self.fwhm, area=self.area, center=self.center)
 
     def set(self, **kwargs):
         """The setter ensures notifying the observers."""
         self.fwhm = kwargs.get("fwhm", self.fwhm)
-        self.height = kwargs.get("height", self.height)
+        self.area = kwargs.get("area", self.area)
         self.center = kwargs.get("center", self.center)
+        if any([attr in kwargs for attr in ["fwhm", "area", "center"]]):
+            self.model.init_params(
+                self, fwhm=self.fwhm, area=self.area, center=self.center)
         self.emit("changed_peak")
 
     @property
@@ -309,13 +329,13 @@ class Peak(object):
         """Fetches peak intensity from the ModelIface."""
         return self.model.get_peak_intensity(self)
 
-    def set_constraint(self, param, **kwargs):
+    def set_constraints(self, attr, **kwargs):
         """Sets a constraint for peak fitting."""
-        pass
+        self.model.add_constraint(self, attr, **kwargs)
 
-    def set_relation(self, other, param, other_param, relation):
+    def get_constraint(self, attr, argname):
         """Sets a relation between fitting parameters."""
-        pass
+        return self.model.get_constraint(self, attr, argname)
 
     def set_model_func(self, model_name):
         """Sets the fitting model."""
@@ -326,7 +346,7 @@ class Peak(object):
             self.model.guess_params(self)
         else:
             self.model.init_params(
-                self, height=self.height, fwhm=self.fwhm, center=self.center)
+                self, area=self.area, fwhm=self.fwhm, center=self.center)
 
     def subscribe(self, callback):
         """Bind a new callback to this."""

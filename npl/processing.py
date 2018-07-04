@@ -136,18 +136,15 @@ class RegionFitModelIface(object):
 
     def init_params(self, peak, **kwargs):
         """Sets initial values chosen by user."""
-        for parname in ("height", "fwhm", "center"):
+        for parname in ("area", "fwhm", "center"):
             if parname not in kwargs:
                 raise TypeError("Missing keyword argument {}".format(parname))
 
         model = self.single_models[peak.prefix]
         if peak.model_name == "PseudoVoigt":
             sigma = kwargs["fwhm"] / 2
-            amplitude = (kwargs["height"]
-                         * (2 * sigma * np.sqrt(np.pi / np.log(2)))
-                         / (1 + np.sqrt(1 / (np.pi * np.log(2)))))
             model.set_param_hint("sigma", value=sigma)
-            model.set_param_hint("amplitude", value=amplitude)
+            model.set_param_hint("amplitude", value=kwargs["area"])
             model.set_param_hint("center", value=kwargs["center"])
             params = model.make_params()
             self.params += params
@@ -166,9 +163,7 @@ class RegionFitModelIface(object):
                 sigma = self.params["{}sigma".format(peak.prefix)].value
                 center = self.params["{}center".format(peak.prefix)].value
                 peak.set(fwhm=sigma * 2)
-                peak.set(height=(amp
-                                 * (1 + np.sqrt(1 / (np.pi * np.log(2))))
-                                 / (2 * sigma * np.sqrt(np.pi / np.log(2)))))
+                peak.set(area=amp)
                 peak.set(center=center)
 
         # print(result.fit_report())
@@ -184,11 +179,62 @@ class RegionFitModelIface(object):
             return None
         return self.total_model.eval(params=self.params, x=self.region.energy)
 
-    def add_constraint(self, peak, param, **kwargs):
+    def add_constraint(self, peak, attr, **kwargs):
         """Adds a constraint to a Peak parameter."""
-        param_name = peak.prefix + param
-        self.params[param_name].set(**kwargs)
+        minval = kwargs.get("min", None)
+        if minval:
+            minval = float(minval)
+        maxval = kwargs.get("max", None)
+        if maxval:
+            maxval = float(maxval)
+        vary = kwargs.get("vary", None)
+        expr = kwargs.get("expr", None)
+        value = kwargs.get("value", None)
+        if peak.model_name == "PseudoVoigt":
+            relations = {
+                "area": "amplitude",
+                "fwhm": "sigma",
+                "center": "center"}
+            if attr == "fwhm":
+                if minval:
+                    minval /= 2
+                if maxval:
+                    maxval /= 2
+                if value:
+                    value /= 2
+                if expr:
+                    expr += "/ 2"
+        else:
+            relations = {}
+        self.params["{}{}".format(peak.prefix, relations[attr])].set(
+            min=minval, max=maxval, vary=vary, expr=expr, value=value)
 
-    def add_relation(self):
-        """Relates two parameters."""
-        pass
+    def get_constraint(self, peak, attr, argname):
+        """Returns a string containing min/max or expr."""
+        if peak.model_name == "PseudoVoigt":
+            relations = {
+                "area": "amplitude",
+                "fwhm": "sigma",
+                "center": "center"}
+        else:
+            relations = {}
+        param = self.params["{}{}".format(peak.prefix, relations[attr])]
+        minval = param.min
+        maxval = param.max
+        _vary = param.vary
+        expr = param.expr
+        if attr == "fwhm":
+            minval *= 2
+            maxval *= 2
+            if expr:
+                if expr[-3:] == "/ 2":
+                    expr = expr[:-3]
+        if argname == "min":
+            return minval
+        if argname == "max":
+            return maxval
+        if argname == "expr":
+            if expr is None:
+                return ""
+            return expr
+        return None
